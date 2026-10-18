@@ -33,9 +33,11 @@
 | `id` | `C1`、`C2`… |
 | `text` | 约束内容 |
 | `kind` | `hard`（违反即不可接受）或 `soft`（偏好） |
+| `basis` | 谁说了算：`value` 用户的价值或偏好（用户决定）；`own_fact` 用户自身处境（用户是最可靠的证人）；`world_fact` 对外部世界的判断（由证据决定，用户说了不算） |
+| `evidence` | 支撑这条约束的证据 ID。`world_fact` 类硬约束要有一条已核实的证据，才能用来淘汰 |
 | `source` | 出处：用户原话所在轮次、文档、推断 |
 | `quote` | 用户原话 |
-| `verified` | 用户是否确认过。未确认的硬约束不能用来淘汰 |
+| `verified` | 用户是否确认过。未确认的硬约束不能用来淘汰；对 `world_fact` 来说，用户确认不够，还要有证据 |
 
 ## `archetypes[]`（近似母题）
 
@@ -61,8 +63,11 @@
 | `kind` | `goal` 目标、`category` 类别、`candidate` 具体候选、`subgoal` 子目标（多由冲突核跳转产生）、`relax` 放松某条约束的方案 |
 | `status` | `open` 待评估、`expanded` 已展开、`pruned` 淘汰、`parked` 搁置、`failed` 失败、`verified` 已验证、`chosen` 选定 |
 | `round` | 首次出现的轮次 |
+| `proposed_by` | 谁提出的：`user` 或 `ai`。用户提出的做法是候选，不是约束；被选定前同层要有经过评估的对照 |
 | `pruned_by` | 淘汰时违反的硬约束 ID，必须是已确认的硬约束 |
 | `parked_by` | 搁置时涉及的约束 ID（通常是软偏好） |
+| `park_reference` | 因软偏好搁置时的比较：`{measure, direction, compared_to, external, note}`。`measure` 比较维度（如 `cost_month`）；`direction` 为 `lower`（越低越好，默认）或 `higher`；`compared_to` 台账里的参照节点；`external` 台账外的参照（如"免费信用卡"）。参照节点全部出局、或本节点已是可行集合里该维度最好的，脚本会提醒重审。回填时，节点被重新启用后仍保留该字段作为记录 |
+| `attrs` | 可比较的数值属性，如 `{"cost_month": 5, "wait_days": 30}`。键名与 `park_reference.measure` 一致，脚本才能在可行集合里比较 |
 | `evidence` | 支撑判断的证据 ID；用于淘汰时必须已核实 |
 | `note` | 备注；搁置或失败没有对应记录时，原因写这里 |
 | `history` | 状态变化记录：`[{round, status, note}]` |
@@ -82,6 +87,25 @@
 | `jump_to` | 跳到的上一层节点（新的子目标） |
 | `round` | 提取出来的轮次 |
 | `note` | 备注 |
+
+## `disagreements[]`（人机分歧）
+
+用户与 AI 意见不同时记一条。这组数据回答"谁在什么问题上是天花板"。
+
+| 字段 | 含义 |
+|---|---|
+| `id` | `D1`… |
+| `round` | 轮次 |
+| `about` | 涉及的节点或约束 ID |
+| `basis` | 分歧的类别：`value`、`own_fact`、`world_fact`、`method`（做法） |
+| `user_position` | 用户的立场 |
+| `ai_position` | AI 的立场与理由 |
+| `test` | 用什么检验来分出对错 |
+| `resolution` | `pending` 待检验、`user_right` 用户对、`ai_right` AI 对、`both_partly` 各对一部分、`user_decides` 用户决定 |
+| `verification` | 判定对错所依据的验证 ID |
+| `note` | 备注 |
+
+规则：`value` 类分歧没有对错，只能 `user_decides`；`world_fact` 与 `method` 类判 `user_right`、`ai_right`、`both_partly` 时，必须挂一条已出结果的验证；`user_decides` 用在这两类上时，表示"按用户意见执行、但未验证"，脚本会提醒把检验排进下一步。
 
 ## `evidence[]`
 
@@ -125,4 +149,4 @@
 
 ## 脚本自动计算的指标
 
-记录轮数、用户纠正次数、现实尝试次数与失败次数、各状态节点数、冲突核数、母题更换次数、搁置后重新启用的节点数、解首次出现轮次、解选定轮次。后两项之差，就是"答案已经出现、却没被采用"的轮数。
+记录轮数、用户纠正次数、分歧数及各结果（用户对、AI 对、各对一部分、用户决定、待检验）、用户提出的节点数、现实尝试次数与失败次数、各状态节点数、冲突核数、母题更换次数、搁置后重新启用的节点数、解首次出现轮次、解选定轮次。后两项之差，就是"答案已经出现、却没被采用"的轮数。

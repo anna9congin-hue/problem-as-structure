@@ -63,6 +63,19 @@ EVIDENCE_TYPES = {"fact", "computation", "test", "prediction", "preference"}
 VERIF_RESULTS = {"pass", "fail", "pending"}
 ARCH_STATUS = {"candidate", "active", "rejected"}
 LIVE = {"open", "expanded", "verified", "chosen"}
+# 约束的依据：谁说了算
+BASIS = {"value": "价值/偏好", "own_fact": "用户自身处境", "world_fact": "外部世界事实"}
+# 分歧
+DIS_BASIS = {"value": "价值/偏好", "own_fact": "用户自身处境", "world_fact": "外部世界事实", "method": "做法"}
+DIS_RESOLUTION = {
+    "pending": "待检验",
+    "user_right": "用户对",
+    "ai_right": "AI 对",
+    "both_partly": "各对一部分",
+    "user_decides": "用户决定（未验证或属价值判断）",
+}
+PROPOSERS = {"user", "ai"}
+APPROVAL_WORDS = re.compile(r"满意|同意|认可|觉得(可以|行|好)|点头|approve|approval|happy|satisf", re.I)
 
 
 # ---------------------------------------------------------------- 读写
@@ -122,6 +135,7 @@ def template(case_id, title, origin):
                 "kind": "goal",
                 "status": "open",
                 "round": 1,
+                "proposed_by": "user",
                 "pruned_by": [],
                 "parked_by": [],
                 "evidence": [],
@@ -131,6 +145,7 @@ def template(case_id, title, origin):
         ],
         "links": [],
         "conflicts": [],
+        "disagreements": [],
         "evidence": [],
         "verifications": [],
         "rounds": [],
@@ -165,11 +180,14 @@ def check(case):
         W("problem.goal 为空：先把目标写成一句话")
     if not case["problem"].get("success_test"):
         W("problem.success_test 为空：怎样算解决了，要在原问题里能检验")
+    elif APPROVAL_WORDS.search(case["problem"]["success_test"]):
+        W("规则·验收接现实：success_test 看起来是'用户满意/同意'。成功检验必须是现实里能观察到的结果，"
+          "否则用户的判断就是天花板")
 
     # ID 全局唯一
     seen = {}
-    for group in ["constraints", "archetypes", "nodes", "conflicts", "evidence", "verifications"]:
-        for x in case[group]:
+    for group in ["constraints", "archetypes", "nodes", "conflicts", "evidence", "verifications", "disagreements"]:
+        for x in case.get(group, []):
             i = x.get("id")
             if not i:
                 E(f"{group} 里有条目没有 id")
@@ -185,11 +203,30 @@ def check(case):
     EV = index_by_id(case["evidence"])
     V = case["verifications"]
 
+    EV0 = index_by_id(case["evidence"])
+
+    def world_fact_backed(c):
+        """外部世界事实类约束：要有已核实的证据，用户说了不算。"""
+        return any(EV0.get(r, {}).get("verified") for r in c.get("evidence", []))
+
     for c in case["constraints"]:
+        cid = c.get("id")
         if c.get("kind") not in {"hard", "soft"}:
-            E(f"约束 {c.get('id')} 的 kind 必须是 hard 或 soft")
+            E(f"约束 {cid} 的 kind 必须是 hard 或 soft")
+        b = c.get("basis")
+        if b is None:
+            W(f"约束 {cid} 没标 basis（value / own_fact / world_fact）：先分清这是用户的偏好、用户自身处境，还是对外部世界的判断")
+        elif b not in BASIS:
+            E(f"约束 {cid} 的 basis `{b}` 不在 {sorted(BASIS)}")
+        for r in c.get("evidence", []):
+            if r not in EV0:
+                E(f"约束 {cid} 引用了不存在的证据 {r}")
+        if b == "world_fact" and c.get("kind") == "soft":
+            W(f"约束 {cid} 是外部世界事实，却标成 soft：事实不是偏好，要么是硬约束，要么改成一条证据")
         if c.get("kind") == "hard" and not c.get("verified"):
-            W(f"硬约束 {c['id']} 未经用户确认（verified=false），确认前不能用它淘汰候选")
+            W(f"硬约束 {cid} 未经用户确认（verified=false），确认前不能用它淘汰候选")
+        if b == "world_fact" and c.get("kind") == "hard" and not world_fact_backed(c):
+            W(f"硬约束 {cid} 是对外部世界的判断，但没有已核实的证据：用户说了不等于事实成立，核实前不能用它淘汰候选")
 
     active = [a for a in case["archetypes"] if a.get("status") == "active"]
     for a in case["archetypes"]:
@@ -214,6 +251,8 @@ def check(case):
         E("根节点的 kind 必须是 goal")
     for n in case["nodes"]:
         nid = n.get("id")
+        if n.get("proposed_by") not in (None, "") and n["proposed_by"] not in PROPOSERS:
+            E(f"节点 {nid} 的 proposed_by `{n['proposed_by']}` 必须是 user 或 ai")
         if n.get("parent") not in (None, "") and n["parent"] not in N:
             E(f"节点 {nid} 的 parent `{n['parent']}` 不存在")
         if n.get("kind") not in NODE_KINDS:
@@ -234,6 +273,42 @@ def check(case):
     def verifs(nid, result=None):
         return [v for v in V if v.get("target") == nid and (result is None or v.get("result") == result)]
 
+    OUT = {"pruned", "failed"}
+
+    def check_park_reference(n, pr):
+        """软约束是相对的：检查参照对象是否可行，以及被搁置者是否已是可行集合里该维度最好的。"""
+        nid = n.get("id")
+        measure = pr.get("measure")
+        direction = pr.get("direction", "lower")
+        if direction not in ("lower", "higher"):
+            E(f"{nid} 的 park_reference.direction 必须是 lower（越低越好）或 higher（越高越好）")
+            return
+        comp = pr.get("compared_to", [])
+        for x in comp:
+            if x not in N:
+                E(f"{nid} 的 park_reference.compared_to 引用了不存在的节点 {x}")
+        if not measure:
+            W(f"{nid} 的 park_reference 没写 measure（成本、时间、精力、风险……）")
+        if not comp and not pr.get("external"):
+            W(f"{nid} 的 park_reference 既没有台账里的参照节点（compared_to），也没写台账外的参照（external）")
+        known = [x for x in comp if x in N]
+        if known and all(N[x].get("status") in OUT for x in known):
+            W(f"规则·参照失效：{nid} 因{measure or '某个维度'}比 {', '.join(known)} 差而被搁置，但这些参照都已出局（淘汰或失败）。"
+              "在当前可行集合里重新比较；差出来的部分可能是约束的价格，不是方案的价格")
+        if not measure:
+            return
+        mine = n.get("attrs", {}).get(measure)
+        if not isinstance(mine, (int, float)):
+            return
+        rivals = [s for s in case["nodes"] if s.get("id") != nid and s.get("kind") in ("candidate", "relax")
+                  and s.get("status") not in OUT and isinstance(s.get("attrs", {}).get(measure), (int, float))]
+        better = [s["id"] for s in rivals
+                  if (s["attrs"][measure] < mine if direction == "lower" else s["attrs"][measure] > mine)]
+        if not better:
+            scope = f"（参与比较的可行候选：{', '.join(s['id'] for s in rivals)}）" if rivals else "（没有其他标了该维度的可行候选）"
+            W(f"规则·可行集最优：{nid} 在当前可行候选里 {measure}={mine} 已是最好，却因为它被搁置{scope}。"
+              "把它重新摆出来，说明这是约束的代价，并列出放松哪条约束能换来更好的结果")
+
     for n in case["nodes"]:
         nid, st = n.get("id"), n.get("status")
         if st == "pruned":
@@ -249,6 +324,8 @@ def check(case):
                     E(f"{nid} 被软偏好 {r} 淘汰：软偏好只能搁置（parked），不能淘汰")
                 elif not c.get("verified"):
                     E(f"{nid} 被未确认的硬约束 {r} 淘汰：先请用户确认，或改为搁置")
+                elif c.get("basis") == "world_fact" and not world_fact_backed(c):
+                    E(f"{nid} 被外部世界事实 {r} 淘汰，但 {r} 没有已核实的证据：用户说了不等于事实成立，核实前改为搁置")
             for r in n.get("evidence", []):
                 if r in EV and not EV[r].get("verified"):
                     E(f"{nid} 的淘汰用了未核实的事实 {r}：未核实的事实不得用于淘汰，改为搁置")
@@ -261,6 +338,13 @@ def check(case):
                     E(f"{nid} 的 parked_by 引用了不存在的约束 {r}")
             if not refs and not n.get("note"):
                 E(f"{nid} 被搁置但没写原因（parked_by 或 note）")
+            soft = [r for r in refs if C.get(r, {}).get("kind") == "soft"]
+            pr = n.get("park_reference")
+            if soft and not pr:
+                W(f"{nid} 因软偏好 {soft} 被搁置，但没写 park_reference：'太贵、太慢、太麻烦'是和谁比？"
+                  "写下比较维度和参照对象（见 references/soft_constraints.md）")
+            if pr:
+                check_park_reference(n, pr)
         if st == "failed" and not verifs(nid, "fail") and not n.get("note"):
             E(f"{nid} 标为失败，但没有 result=fail 的验证记录，也没有 note")
         if st == "verified" and not verifs(nid, "pass"):
@@ -269,6 +353,11 @@ def check(case):
             if not verifs(nid, "pass"):
                 msg = f"{nid} 已选定，但还没有在原问题里验证通过（result=pass）"
                 (E if case["status"] == "solved" else W)(msg)
+            sibs = [s for s in case["nodes"] if s.get("parent") == n.get("parent") and s.get("id") != nid]
+            if not any(s.get("status") != "open" for s in sibs):
+                who = "用户提出的" if n.get("proposed_by") == "user" else ""
+                W(f"规则·对照：{who}方案 {nid} 被选定时，同层没有任何经过评估的对照候选。"
+                  "至少再展开并评估一个替代做法，否则提出者的视野就是上限")
 
     for v in V:
         if v.get("target") not in N:
@@ -295,6 +384,32 @@ def check(case):
     for lk in case.get("links", []):
         if lk.get("from") not in N or lk.get("to") not in N:
             E(f"links 里有不存在的节点：{lk}")
+
+    VI = index_by_id(V)
+    for d in case.get("disagreements", []):
+        did, b, res = d.get("id"), d.get("basis"), d.get("resolution")
+        if b not in DIS_BASIS:
+            E(f"分歧 {did} 的 basis `{b}` 不在 {sorted(DIS_BASIS)}")
+        if res not in DIS_RESOLUTION:
+            E(f"分歧 {did} 的 resolution `{res}` 不在 {sorted(DIS_RESOLUTION)}")
+        if not d.get("user_position") or not d.get("ai_position"):
+            E(f"分歧 {did} 要同时写 user_position 和 ai_position")
+        about = d.get("about")
+        if about and about not in N and about not in C:
+            E(f"分歧 {did} 的 about `{about}` 不是已有的节点或约束")
+        v = d.get("verification")
+        if v and v not in VI:
+            E(f"分歧 {did} 引用了不存在的验证 {v}")
+        if b == "value" and res in ("user_right", "ai_right", "both_partly"):
+            W(f"分歧 {did} 属于价值/偏好，没有对错：resolution 应为 user_decides")
+        if b in ("world_fact", "method"):
+            if res in ("user_right", "ai_right", "both_partly"):
+                if not v or VI.get(v, {}).get("result") not in ("pass", "fail"):
+                    E(f"分歧 {did} 判了 {res}，但没有挂一条已出结果（pass/fail）的验证：对错要由原问题里的检验来判")
+            elif res == "user_decides":
+                W(f"分歧 {did}：关于{DIS_BASIS[b]}，按用户意见执行但没有验证。把能分出对错的检验排进下一步")
+            elif res == "pending" and not d.get("test"):
+                W(f"分歧 {did} 待检验，但没写 test：写下用什么检验来分出对错")
 
     # 方法规则提醒
     children = {}
@@ -370,9 +485,21 @@ def metrics(case):
         seq = [h.get("status") for h in n.get("history", [])]
         if "parked" in seq and any(s != "parked" for s in seq[seq.index("parked") + 1:]):
             reopened += 1
+    dis = case.get("disagreements", [])
+
+    def dcount(r):
+        return sum(1 for d in dis if d.get("resolution") == r)
+
     return {
         "记录轮数": len(rounds),
         "用户纠正次数": sum(1 for r in rounds if r.get("correction")),
+        "分歧数": len(dis),
+        "分歧·用户对": dcount("user_right"),
+        "分歧·AI 对": dcount("ai_right"),
+        "分歧·各对一部分": dcount("both_partly"),
+        "分歧·用户决定": dcount("user_decides"),
+        "分歧·待检验": dcount("pending"),
+        "用户提出的节点": sum(1 for n in case["nodes"] if n.get("proposed_by") == "user" and n.get("kind") != "goal"),
         "现实尝试次数": len(attempts),
         "现实尝试失败": sum(1 for a in attempts if a.get("result") == "fail"),
         "节点数": len(case["nodes"]),
@@ -399,6 +526,10 @@ def node_reason(n, case):
         return ctext(n.get("pruned_by", []))
     if st == "parked":
         parts = [ctext(n.get("parked_by", []))] if n.get("parked_by") else []
+        pr = n.get("park_reference")
+        if pr:
+            ref = "、".join(pr.get("compared_to", [])) or pr.get("external", "")
+            parts.append(f"参照：{pr.get('measure', '')}比 {ref or '?'} 差")
         if n.get("note"):
             parts.append(n["note"])
         return "；".join(parts)
@@ -428,7 +559,8 @@ def tree_lines(case):
         reason = node_reason(n, case)
         tag = STATUS_LABEL.get(n.get("status"), n.get("status"))
         kind = "" if n.get("kind") in ("candidate", "goal") else f"〔{KIND_LABEL.get(n.get('kind'), '')}〕"
-        line = f"{'  ' * depth}{STATUS_MARK.get(n.get('status'), '[?]')} {n['id']} {kind}{n.get('label', '')} —— {tag}"
+        who = "（用户提出）" if n.get("proposed_by") == "user" and n.get("kind") != "goal" else ""
+        line = f"{'  ' * depth}{STATUS_MARK.get(n.get('status'), '[?]')} {n['id']} {kind}{n.get('label', '')}{who} —— {tag}"
         if reason:
             line += f"：{reason}"
         if n["id"] in jumps:
@@ -465,13 +597,14 @@ def render_md(case, errors, warnings):
     L.append(f"- 成功检验：{p.get('success_test') or '—'}")
     for s in p.get("initial_state", []):
         L.append(f"- 初始状态：{s}")
-    L += ["", "## 约束", "", "| ID | 约束 | 硬/软 | 已确认 | 来源 |", "|---|---|---|---|---|"]
+    L += ["", "## 约束", "", "| ID | 约束 | 硬/软 | 依据 | 已确认 | 证据 | 来源 |", "|---|---|---|---|---|---|---|"]
     for c in case["constraints"]:
         src = c.get("source", "")
         if c.get("quote"):
             src += f"：「{c['quote']}」"
         L.append(f"| {c['id']} | {md_cell(c.get('text'))} | {'硬' if c.get('kind') == 'hard' else '软'} | "
-                 f"{'是' if c.get('verified') else '否'} | {md_cell(src)} |")
+                 f"{md_cell(BASIS.get(c.get('basis'), c.get('basis')))} | "
+                 f"{'是' if c.get('verified') else '否'} | {md_cell(c.get('evidence'))} | {md_cell(src)} |")
     L += ["", "## 近似母题", "", "| ID | 母题 | 状态 | 映射 | 表示 | 基本解法 | 适用假设 | 失效信号 |",
           "|---|---|---|---|---|---|---|---|"]
     for a in case["archetypes"]:
@@ -488,6 +621,15 @@ def render_md(case, errors, warnings):
         for k in case["conflicts"]:
             L.append(f"| {k['id']} | {md_cell(k.get('failed'))} | {md_cell(k.get('common_cause'))} | "
                      f"{md_cell(k.get('constraint'))} | {md_cell(k.get('jump_to'))} | {md_cell(k.get('round'))} |")
+        L.append("")
+    if case.get("disagreements"):
+        L += ["## 人机分歧", "", "| ID | 轮次 | 关于 | 类别 | 用户立场 | AI 立场 | 检验 | 结果 | 依据的验证 |",
+              "|---|---|---|---|---|---|---|---|---|"]
+        for d in case["disagreements"]:
+            L.append(f"| {d['id']} | {md_cell(d.get('round'))} | {md_cell(d.get('about'))} | "
+                     f"{md_cell(DIS_BASIS.get(d.get('basis'), d.get('basis')))} | {md_cell(d.get('user_position'))} | "
+                     f"{md_cell(d.get('ai_position'))} | {md_cell(d.get('test'))} | "
+                     f"{md_cell(DIS_RESOLUTION.get(d.get('resolution'), d.get('resolution')))} | {md_cell(d.get('verification'))} |")
         L.append("")
     if case["verifications"]:
         L += ["## 原问题里的验证", "", "| ID | 对象 | 方法 | 结果 | 日期 | 说明 |", "|---|---|---|---|---|---|"]
@@ -638,7 +780,7 @@ def cmd_index(args):
         try:
             case = json.loads(f.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
-            rows.append((f.parent.name, "（case.json 无法解析）", "", "", "", "", "", "", ""))
+            rows.append((f.parent.name, "（case.json 无法解析）", "", "", "", "", "", "", "", ""))
             continue
         m = metrics(case)
         errors, _ = check(case)
@@ -652,13 +794,14 @@ def cmd_index(args):
             "；".join(case.get("domain", [])),
             m["记录轮数"],
             m["用户纠正次数"],
+            f"{m['分歧·用户对']} / {m['分歧·AI 对']} / {m['分歧数']}" if m["分歧数"] else "",
             "有" if errors else "",
         ))
     L = ["# 问题结构案例库", "",
          "> 由 `case_tool.py index` 自动生成。每个案例的真源是各自目录下的 `case.json`，`tree.md` 与 `graph.canvas` 由 `render` 生成。",
          "", f"共 {len(rows)} 个案例。", "",
-         "| 案例 | 标题 | 状态 | 查询类型 | 近似母题 | 领域 | 记录轮数 | 用户纠正 | 校验错误 |",
-         "|---|---|---|---|---|---|---|---|---|"]
+         "| 案例 | 标题 | 状态 | 查询类型 | 近似母题 | 领域 | 记录轮数 | 用户纠正 | 分歧（用户对 / AI 对 / 总数） | 校验错误 |",
+         "|---|---|---|---|---|---|---|---|---|---|"]
     L += ["| " + " | ".join(md_cell(x) for x in r) + " |" for r in rows]
     root.mkdir(parents=True, exist_ok=True)
     (root / "INDEX.md").write_text("\n".join(L) + "\n", encoding="utf-8")
