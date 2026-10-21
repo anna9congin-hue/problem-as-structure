@@ -4,7 +4,8 @@
 用法：
   case_tool.py new --slug itin-credit --title "用 ITIN 办美国信用卡" [--origin retro] [--root DIR]
   case_tool.py check  <案例目录或 case.json>
-  case_tool.py render <案例目录或 case.json>      # 校验 + 写 tree.md 与 graph.canvas，并打印状态树
+  case_tool.py render <案例目录或 case.json>      # 校验 + 写 tree.md、graph.canvas 与 progress.html，并打印状态树
+  case_tool.py html   <案例目录或 case.json>      # 只写 progress.html（离线单文件进展面板）
   case_tool.py index  [--root DIR]               # 重建 INDEX.md
 
 案例库根目录：--root 参数 > 环境变量 PROBLEM_CASES_DIR > DEFAULT_ROOT。
@@ -75,6 +76,12 @@ DIS_RESOLUTION = {
     "user_decides": "用户决定（未验证或属价值判断）",
 }
 PROPOSERS = {"user", "ai"}
+# 进展面板：阶段
+CLAIM_STATUS = {"current": "有效", "superseded": "已取代", "withdrawn": "已撤回", "refuted": "已证伪"}
+EDGE_TYPES = {"conclusion": "依赖结论", "method": "继承方法", "cites": "只引用"}
+CLAIM_KINDS = {"create", "fix_reason", "narrow_statement", "clarify_assumption", "cite_update", "withdraw"}
+STAGE_STATUS = {"done": "完成", "partial": "部分完成", "active": "进行中", "todo": "未开始", "later": "推迟"}
+STAGE_MARK = {"done": "✓", "partial": "◐", "active": "▶", "todo": "○", "later": "…"}
 APPROVAL_WORDS = re.compile(r"满意|同意|认可|觉得(可以|行|好)|点头|approve|approval|happy|satisf", re.I)
 
 
@@ -186,7 +193,7 @@ def check(case):
 
     # ID 全局唯一
     seen = {}
-    for group in ["constraints", "archetypes", "nodes", "conflicts", "evidence", "verifications", "disagreements"]:
+    for group in ["constraints", "archetypes", "nodes", "conflicts", "evidence", "verifications", "disagreements", "claims"]:
         for x in case.get(group, []):
             i = x.get("id")
             if not i:
@@ -359,8 +366,9 @@ def check(case):
                 W(f"规则·对照：{who}方案 {nid} 被选定时，同层没有任何经过评估的对照候选。"
                   "至少再展开并评估一个替代做法，否则提出者的视野就是上限")
 
+    CL = index_by_id(case.get("claims") or [])
     for v in V:
-        if v.get("target") not in N:
+        if v.get("target") not in N and v.get("target") not in CL:
             E(f"验证 {v.get('id')} 的 target `{v.get('target')}` 不存在")
         if v.get("result") not in VERIF_RESULTS:
             E(f"验证 {v.get('id')} 的 result 必须是 {sorted(VERIF_RESULTS)}")
@@ -382,8 +390,11 @@ def check(case):
             E(f"冲突 {k.get('id')} 没写 common_cause")
 
     for lk in case.get("links", []):
-        if lk.get("from") not in N or lk.get("to") not in N:
-            E(f"links 里有不存在的节点：{lk}")
+        f, to = lk.get("from"), lk.get("to")
+        if (f in CL) != (to in CL) or (f not in N and f not in CL) or (to not in N and to not in CL):
+            E(f"links 里有不存在的节点或论断（论断只能连论断）：{lk}")
+        if "edge" in lk and lk["edge"] not in EDGE_TYPES:
+            E(f"links 的 edge `{lk['edge']}` 不在 {list(EDGE_TYPES)}：{lk}")
 
     VI = index_by_id(V)
     for d in case.get("disagreements", []):
@@ -451,7 +462,213 @@ def check(case):
         if n <= last:
             E(f"rounds 的轮次必须递增（{last} 之后出现 {n}）")
         last = n
+
+    check_progress(case, N, C, E)
+    check_claims(case, N, C, EV, E, W)
     return errors, warnings
+
+
+def check_progress(case, N, C, E):
+    """进展面板用的可选字段：stages、pending、running。缺省即不检查。"""
+    S = {}
+    stages = case.get("stages")
+    if stages is not None:
+        if not isinstance(stages, list):
+            E("stages 必须是列表")
+            stages = []
+        for s in stages:
+            if not isinstance(s, dict) or not s.get("id"):
+                E("stages 里有条目没有 id")
+                continue
+            if s["id"] in S:
+                E(f"阶段 id `{s['id']}` 重复")
+            S[s["id"]] = s
+        for sid, s in S.items():
+            if not s.get("label"):
+                E(f"阶段 {sid} 没有 label")
+            if s.get("status") not in STAGE_STATUS:
+                E(f"阶段 {sid} 的 status `{s.get('status')}` 不在 {list(STAGE_STATUS)}")
+            outs = s.get("outputs", [])
+            if not isinstance(outs, list) or not all(isinstance(x, str) for x in outs):
+                E(f"阶段 {sid} 的 outputs 必须是字符串列表")
+            if not isinstance(s.get("missing", ""), str):
+                E(f"阶段 {sid} 的 missing 必须是字符串")
+            deps = s.get("depends_on", [])
+            if not isinstance(deps, list):
+                E(f"阶段 {sid} 的 depends_on 必须是列表")
+            else:
+                for d in deps:
+                    if d not in S:
+                        E(f"阶段 {sid} 的 depends_on 引用了不存在的阶段 {d}")
+            ns = s.get("nodes", [])
+            if not isinstance(ns, list):
+                E(f"阶段 {sid} 的 nodes 必须是列表")
+            else:
+                for x in ns:
+                    if x not in N:
+                        E(f"阶段 {sid} 的 nodes 引用了不存在的节点 {x}")
+        state = {}
+
+        def visit(sid):
+            if state.get(sid) == 1:
+                return True
+            if state.get(sid) == 2:
+                return False
+            state[sid] = 1
+            deps = S[sid].get("depends_on", [])
+            cyc = isinstance(deps, list) and any(d in S and visit(d) for d in deps)
+            state[sid] = 2
+            return cyc
+
+        for sid in S:
+            if sid not in state and visit(sid):
+                E(f"阶段 {sid} 的 depends_on 有环")
+
+    pending = case.get("pending")
+    if pending is not None:
+        if not isinstance(pending, list):
+            E("pending 必须是列表")
+            pending = []
+        seen = set()
+        for p in pending:
+            if not isinstance(p, dict) or not p.get("id"):
+                E("pending 里有条目没有 id")
+                continue
+            pid = p["id"]
+            if pid in seen:
+                E(f"待决事项 id `{pid}` 重复")
+            seen.add(pid)
+            if not p.get("question"):
+                E(f"待决事项 {pid} 没有 question")
+            about = p.get("about", [])
+            if isinstance(about, str):
+                about = [about]
+            if not isinstance(about, list):
+                E(f"待决事项 {pid} 的 about 必须是 ID 列表")
+                about = []
+            for a in about:
+                if a not in N and a not in C and a not in S:
+                    E(f"待决事项 {pid} 的 about `{a}` 不是已有的节点、约束或阶段")
+            if "since_round" in p and not isinstance(p["since_round"], int):
+                E(f"待决事项 {pid} 的 since_round 必须是整数")
+
+    running = case.get("running")
+    if running is not None:
+        if not isinstance(running, list):
+            E("running 必须是列表")
+            running = []
+        for r in running:
+            if not isinstance(r, dict) or not r.get("label"):
+                E("running 里有条目没有 label")
+                continue
+            for k in ("report_path", "started"):
+                if k in r and not isinstance(r[k], str):
+                    E(f"后台任务「{r['label']}」的 {k} 必须是字符串")
+
+
+# ---------------------------------------------------------------- 论断台账（可选）
+
+def claim_edges(case):
+    """论断之间的依赖边：links 里 type=depends_on 且两端都是论断。edge 缺省按 conclusion（保守）。"""
+    CL = index_by_id(case.get("claims") or [])
+    out = []
+    for lk in case.get("links", []):
+        if lk.get("type") == "depends_on" and lk.get("from") in CL and lk.get("to") in CL:
+            out.append((lk["from"], lk["to"], lk.get("edge", "conclusion")))
+    return out
+
+
+def claim_grade(case, cl):
+    """等级由验证记录计算，不手填。V0 无通过的验证；V1 有通过；V2 通过且可复跑（rerun）；
+    V3 通过且检验者独立于提出者（independent=true）。coverage.weaker_than_claim 为真时降一级。"""
+    vs = [v for v in case["verifications"] if v.get("target") == cl.get("id") and v.get("result") == "pass"]
+    g = 0
+    if vs:
+        g = 1
+        if any(v.get("rerun") for v in vs):
+            g = 2
+        if any(v.get("independent") is True for v in vs):
+            g = 3
+    if (cl.get("coverage") or {}).get("weaker_than_claim") and g > 0:
+        g -= 1
+    return g
+
+
+def claim_alerts(case):
+    """上游被撤回/证伪：沿 conclusion、method 边传递连带；cites 边只提醒改引用，不再往下传。"""
+    CL = index_by_id(case.get("claims") or [])
+    edges = claim_edges(case)
+    down = {}
+    for f, to, e in edges:
+        down.setdefault(to, []).append((f, e))
+    rules, notes = [], []
+    for cid, c in CL.items():
+        st = c.get("status", "current")
+        if st in ("withdrawn", "refuted"):
+            seen, stack = set(), [cid]
+            while stack:
+                u = stack.pop()
+                for f, e in down.get(u, []):
+                    if e == "cites" or f in seen:
+                        continue
+                    seen.add(f)
+                    if CL[f].get("status", "current") in ("withdrawn", "refuted", "superseded"):
+                        continue
+                    rules.append((f, cid, u, e))
+                    stack.append(f)
+    for f, to, e in edges:
+        st = CL[to].get("status", "current")
+        if CL[f].get("status", "current") in ("withdrawn", "refuted", "superseded"):
+            continue
+        if e == "cites" and st in ("withdrawn", "refuted", "superseded"):
+            notes.append((f, to, e, st))
+        elif e != "cites" and st == "superseded":
+            notes.append((f, to, e, st))
+    return rules, notes
+
+
+def check_claims(case, N, C, EV, E, W):
+    claims = case.get("claims")
+    if claims is None:
+        return
+    if not isinstance(claims, list):
+        E("claims 必须是列表")
+        return
+    CL = index_by_id(claims)
+    S = index_by_id(case.get("stages") or [])
+    for c in claims:
+        cid = c.get("id")
+        if not cid:
+            continue
+        if not c.get("statement"):
+            E(f"论断 {cid} 没有 statement")
+        st = c.get("status", "current")
+        if st not in CLAIM_STATUS:
+            E(f"论断 {cid} 的 status `{st}` 不在 {list(CLAIM_STATUS)}")
+        if c.get("supersedes") and c["supersedes"] not in CL:
+            E(f"论断 {cid} 的 supersedes `{c['supersedes']}` 不存在")
+        if st == "current" and c.get("withdrawal"):
+            E(f"论断 {cid} 状态是有效，却带有 withdrawal")
+        if st == "withdrawn" and (c.get("withdrawal") or {}).get("scope") not in ("proof", "statement"):
+            E(f"论断 {cid} 已撤回，withdrawal.scope 必须是 proof（理由失效）或 statement（陈述本身作废）")
+        for a in c.get("about", []) or []:
+            if a not in N and a not in C and a not in S:
+                E(f"论断 {cid} 的 about `{a}` 不是已有的节点、约束或阶段")
+        for r in c.get("evidence", []) or []:
+            if r not in EV:
+                E(f"论断 {cid} 引用了不存在的证据 {r}")
+        cov = c.get("coverage")
+        if cov is not None and (not isinstance(cov, dict) or not isinstance(cov.get("not_covered", []), list)):
+            E(f"论断 {cid} 的 coverage 必须是 {{checked, not_covered: [..], weaker_than_claim}}")
+        for h in c.get("history", []) or []:
+            if h.get("kind") not in CLAIM_KINDS:
+                E(f"论断 {cid} 的 history.kind `{h.get('kind')}` 不在 {sorted(CLAIM_KINDS)}")
+    rules, notes = claim_alerts(case)
+    for f, root, via, e in rules:
+        W(f"规则·连带：{f} 经「{EDGE_TYPES[e]}」依赖 {via}；上游 {root} {CLAIM_STATUS[CL[root].get('status')]}。"
+          "需重审、收窄或降级后再对外使用")
+    for f, to, e, st in notes:
+        W(f"提醒·改引用：{f} 「{EDGE_TYPES[e]}」指向{CLAIM_STATUS[st]}的 {to}，更新引用即可，不连带")
 
 
 # ---------------------------------------------------------------- 指标
@@ -490,7 +707,7 @@ def metrics(case):
     def dcount(r):
         return sum(1 for d in dis if d.get("resolution") == r)
 
-    return {
+    m = {
         "记录轮数": len(rounds),
         "用户纠正次数": sum(1 for r in rounds if r.get("correction")),
         "分歧数": len(dis),
@@ -510,6 +727,13 @@ def metrics(case):
         "解首次出现轮次": first_seen,
         "解选定轮次": chosen_at,
     }
+    cls = case.get("claims") or []
+    if cls:
+        m["论断数"] = len(cls)
+        for g in range(4):
+            m[f"论断·V{g}"] = sum(1 for c in cls if c.get("status", "current") == "current" and claim_grade(case, c) == g)
+        m["论断·已撤回或证伪"] = sum(1 for c in cls if c.get("status") in ("withdrawn", "refuted"))
+    return m
 
 
 # ---------------------------------------------------------------- 渲染
@@ -643,6 +867,8 @@ def render_md(case, errors, warnings):
             L.append(f"| {e['id']} | {md_cell(e.get('claim'))} | {md_cell(e.get('type'))} | "
                      f"{'是' if e.get('verified') else '否'} | {md_cell(e.get('source'))} |")
         L.append("")
+    if case.get("claims"):
+        L += claims_md(case)
     sol = case["solution"]
     L += ["## 方案", "", f"- 选定：{md_cell(sol.get('chosen'))}", f"- 备选：{md_cell(sol.get('alternatives'))}",
           f"- 说明：{sol.get('summary') or '—'}", ""]
@@ -672,6 +898,23 @@ def render_md(case, errors, warnings):
         L.append("全部通过。")
     L += [f"- 错误：{e}" for e in errors] + [f"- 提醒：{w}" for w in warnings]
     return "\n".join(L) + "\n"
+
+
+def claims_md(case):
+    edges = claim_edges(case)
+    L = ["## 论断", "", "> 等级由验证记录自动计算：V0 未验证，V1 核查通过，V2 可复跑，V3 独立检验；覆盖弱于论断时降一级。", "",
+         "| ID | 论断 | 状态 | 等级 | 覆盖 | 上游（边） | 下游（边） |", "|---|---|---|---|---|---|---|"]
+    for c in case["claims"]:
+        cid = c.get("id")
+        cov = c.get("coverage") or {}
+        covs = "；".join(x for x in [cov.get("checked", ""), ("未覆盖：" + "、".join(cov.get("not_covered", []))) if cov.get("not_covered") else "",
+                                     "弱于论断" if cov.get("weaker_than_claim") else ""] if x)
+        up = "、".join(f"{t}（{EDGE_TYPES.get(e, e)}）" for f, t, e in edges if f == cid)
+        dn = "、".join(f"{f}（{EDGE_TYPES.get(e, e)}）" for f, t, e in edges if t == cid)
+        L.append(f"| {cid} | {md_cell(c.get('statement'))} | {CLAIM_STATUS.get(c.get('status', 'current'), c.get('status'))} | "
+                 f"V{claim_grade(case, c)} | {md_cell(covs)} | {md_cell(up)} | {md_cell(dn)} |")
+    L.append("")
+    return L
 
 
 def render_canvas(case):
@@ -729,6 +972,669 @@ def render_canvas(case):
     return {"nodes": nodes, "edges": edges}
 
 
+# ---------------------------------------------------------------- 进展面板（progress.html）
+
+def html_payload(case, errors, warnings):
+    jumps = {}
+    for k in case["conflicts"]:
+        for f in k.get("failed", []):
+            jumps[f] = k.get("id")
+    return {
+        "case": case,
+        "labels": {
+            "status": STATUS_LABEL, "mark": STATUS_MARK, "kind": KIND_LABEL, "case_status": CASE_STATUS,
+            "query": QUERY_TYPES, "basis": BASIS, "dis_basis": DIS_BASIS, "dis_resolution": DIS_RESOLUTION,
+            "stage_status": STAGE_STATUS, "stage_mark": STAGE_MARK, "node_order": NODE_STATUS,
+        },
+        "reasons": {n["id"]: node_reason(n, case) for n in case["nodes"] if n.get("id")},
+        "claim_grades": {c["id"]: claim_grade(case, c) for c in (case.get("claims") or []) if c.get("id")},
+        "claim_edges": claim_edges(case),
+        "claim_status": CLAIM_STATUS, "edge_types": EDGE_TYPES,
+        "jumps": jumps,
+        "metrics": list(metrics(case).items()),
+        "errors": errors,
+        "warnings": warnings,
+        "generated": datetime.datetime.now().isoformat(timespec="seconds"),
+    }
+
+
+def render_html(case, errors, warnings):
+    import html as _html
+    data = json.dumps(html_payload(case, errors, warnings), ensure_ascii=False)
+    # 嵌在 <script> 里：转义 < > & 与行分隔符，内容里的任何标签都无法闭合脚本块
+    for a, b in (("&", "\\u0026"), ("<", "\\u003c"), (">", "\\u003e"), ("\u2028", "\\u2028"), ("\u2029", "\\u2029")):
+        data = data.replace(a, b)
+    title = _html.escape(f"进展面板 · {case.get('title', '')}")
+    return HTML_TEMPLATE.replace("__TITLE__", title).replace("__DATA__", data)
+
+
+HTML_TEMPLATE = r"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="refresh" content="10">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<style>
+:root{--fg:#1a1a1a;--muted:#4a4a4a;--line:#c8c8c8;--bg:#fafafa;--card:#fff;--focus:#0b57d0}
+*{box-sizing:border-box}
+body{margin:0;font:14px/1.55 -apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;color:var(--fg);background:var(--bg)}
+main{max-width:1500px;margin:0 auto;padding:16px 20px 60px}
+h1{font-size:22px;margin:0 0 4px}h2{font-size:17px;margin:0 0 8px}h3{font-size:15px;margin:12px 0 6px}
+.meta{color:var(--muted);margin:0}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin:12px 0}
+.top{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.top .card{margin:0}
+.pending{border:2px solid #9a6b00;background:#fffaf0}.running{border:2px solid #1f5fbf;background:#f4f8ff}
+.top ul{margin:0;padding-left:20px}.top li{margin:4px 0}
+button{font:inherit;color:inherit;cursor:pointer}
+button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible{outline:3px solid var(--focus);outline-offset:2px}
+.link{background:none;border:none;padding:0 2px;color:#0b57d0;text-decoration:underline}
+code{font:12px/1.4 ui-monospace,Menlo,monospace;background:#f0f0f0;padding:1px 4px;border-radius:3px;word-break:break-all}
+.cols{display:grid;grid-template-columns:minmax(0,1fr) 420px;gap:12px;align-items:start}
+.sticky{position:sticky;top:8px;max-height:calc(100vh - 16px);overflow:auto}
+#stagewrap{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:12px;align-items:start}
+#stagemap{position:relative;overflow:auto}
+#stagemap svg{position:absolute;left:0;top:0;pointer-events:none}
+.stg{position:absolute;width:200px;height:54px;border-radius:6px;border:2px solid;text-align:left;padding:4px 8px;line-height:1.3;overflow:hidden}
+.stg small{display:block;font-size:12px}
+.stg[aria-pressed=true]{box-shadow:0 0 0 3px #0b57d0}
+.s-done{background:#d7f5dd;border-color:#1b7a34;color:#0b3d18}
+.s-partial{background:#fff1c9;border-color:#9a6b00;color:#4a3300}
+.s-active{background:#dde9fb;border-color:#1f5fbf;border-width:4px;color:#0d2f66}
+.s-todo{background:#f1f1f1;border-color:#6b6b6b;color:#262626}
+.s-later{background:#f7f7f7;border-color:#6b6b6b;border-style:dashed;color:#3d3d3d}
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12px;color:var(--muted);margin:4px 0 8px}
+.legend span{display:inline-flex;align-items:center;gap:4px}
+.sw{display:inline-block;min-width:26px;text-align:center;border:1px solid;border-radius:3px;padding:0 3px;font:12px ui-monospace,Menlo,monospace}
+.controls{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;margin-bottom:8px}
+.controls input[type=search]{padding:4px 8px;border:1px solid #767676;border-radius:4px;min-width:220px}
+.tree,.tree ul{list-style:none;margin:0;padding-left:0}
+.tree ul{padding-left:22px;border-left:1px dotted #9a9a9a;margin-left:11px}
+.row{display:flex;align-items:flex-start;gap:4px;margin:2px 0}
+.tog{width:22px;height:22px;flex:none;border:1px solid #767676;background:#fff;border-radius:4px;padding:0;line-height:18px}
+.spacer{width:22px;flex:none}
+.nb{flex:1;text-align:left;border:1px solid;border-radius:5px;padding:3px 8px;background:#fff}
+.nb[aria-pressed=true]{box-shadow:0 0 0 3px #0b57d0}
+.nb.ctx{border-style:dashed}
+.mark{font:12px ui-monospace,Menlo,monospace;font-weight:700}
+.nid{font-weight:700}
+.reason{display:block;font-size:12px;color:var(--muted)}
+.badge{display:inline-block;font-size:11px;border-radius:9px;padding:0 6px;margin-left:4px;background:#5b2a86;color:#fff;font-weight:600}
+.badge.corr{background:#a12a2a}
+.n-chosen{background:#d7f5dd;border-color:#1b7a34;color:#0b3d18}
+.n-verified{background:#d9f2f2;border-color:#0f6e6e;color:#073b3b}
+.n-expanded{background:#dde9fb;border-color:#1f5fbf;color:#0d2f66}
+.n-open{background:#f5f5f5;border-color:#6b6b6b;color:#1f1f1f}
+.n-parked{background:#fff1c9;border-color:#9a6b00;color:#4a3300}
+.n-pruned{background:#fbe0e0;border-color:#a12a2a;color:#5c1010}
+.n-failed{background:#f6cccc;border-color:#7a0f0f;color:#4d0808}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{border:1px solid var(--line);padding:4px 6px;text-align:left;vertical-align:top}
+th{background:#efefef}
+details>summary{cursor:pointer;font-weight:600;font-size:16px;padding:2px 0}
+dl{margin:0;display:grid;grid-template-columns:max-content 1fr;gap:3px 10px}dt{color:var(--muted)}dd{margin:0}
+.panel ul{padding-left:18px;margin:4px 0}
+.ok{color:#0b5e24;font-weight:600}.no{color:#8a1c1c;font-weight:600}
+.copy{border:1px solid #1f5fbf;background:#1f5fbf;color:#fff;border-radius:4px;padding:3px 10px}
+.rounds{list-style:none;padding:0;margin:0}
+.rounds>li{border-left:3px solid #1f5fbf;padding:4px 10px;margin:8px 0}
+.rounds>li.corr{border-left-color:#a12a2a}
+.err{color:#8a1c1c}.warn{color:#6b4a00}
+.sr{position:absolute;left:-9999px}
+@media (max-width:1000px){.cols,#stagewrap,.top{grid-template-columns:1fr}.sticky{position:static;max-height:none}}
+</style>
+</head>
+<body>
+<main id="app">
+<noscript><p>这个面板需要启用 JavaScript；真源是同目录的 case.json，也可以看 tree.md。</p></noscript>
+</main>
+<svg id="svg-proto" style="display:none" aria-hidden="true" focusable="false"><defs><marker id="arrowhead" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#555"/></marker></defs></svg>
+<script type="application/json" id="case-data">__DATA__</script>
+<script>
+(function () {
+  'use strict';
+  var D = JSON.parse(document.getElementById('case-data').textContent);
+  var C = D.case, L = D.labels;
+  var KEY = 'pas-progress:' + (C.id || '');
+  var state = {};
+  try { state = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (e) { state = {}; }
+  state.collapsed = state.collapsed || {};
+  state.open = state.open || {};
+  state.roundsOpen = state.roundsOpen || {};
+  state.who = state.who || 'all';
+  state.q = state.q || '';
+  function save() {
+    state.scroll = window.scrollY;
+    try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {}
+  }
+
+  // 只用 textContent / setAttribute 写入内容：案例文本永远不会被当成 HTML 解析
+  function el(tag, attrs, kids) {
+    var e = document.createElement(tag);
+    if (attrs) Object.keys(attrs).forEach(function (k) {
+      var v = attrs[k];
+      if (v === null || v === undefined || v === false) return;
+      if (k === 'text') e.textContent = String(v);
+      else if (k === 'class') e.className = v;
+      else if (k.slice(0, 2) === 'on') e.addEventListener(k.slice(2), v);
+      else e.setAttribute(k, v === true ? '' : String(v));
+    });
+    (kids || []).forEach(function (c) {
+      if (c === null || c === undefined || c === false) return;
+      e.appendChild(typeof c === 'string' || typeof c === 'number' ? document.createTextNode(String(c)) : c);
+    });
+    return e;
+  }
+  function arr(x) { return Array.isArray(x) ? x : (x === null || x === undefined || x === '' ? [] : [x]); }
+  function byId(list) { var m = {}; arr(list).forEach(function (x) { if (x && x.id) m[x.id] = x; }); return m; }
+  function txt(x) { return Array.isArray(x) ? x.join('；') : (x === null || x === undefined || x === '' ? '—' : String(x)); }
+
+  var nodes = arr(C.nodes), N = byId(nodes), CI = byId(C.constraints), EV = byId(C.evidence);
+  var stages = arr(C.stages), SI = byId(stages);
+  var kids = {};
+  nodes.forEach(function (n) { var p = n.parent || ''; (kids[p] = kids[p] || []).push(n); });
+  var rounds = arr(C.rounds);
+  var latest = rounds.reduce(function (m, r) { return typeof r.n === 'number' && r.n > m ? r.n : m; }, 0);
+  function changedLatest(n) {
+    if (!latest) return false;
+    if (n.round === latest) return true;
+    return arr(n.history).some(function (h) { return h.round === latest; });
+  }
+  function stLabel(s) { return L.status[s] || s || '?'; }
+  function mark(s) { return L.mark[s] || '[?]'; }
+
+  var app = document.getElementById('app');
+  var live = el('p', { class: 'sr', 'aria-live': 'polite', id: 'live' });
+
+  // ------------------------------------------------ 引用按钮：跳到节点或阶段
+  function refButton(id) {
+    if (N[id]) return el('button', { class: 'link', type: 'button', text: id, title: N[id].label || '', onclick: function () { selectNode(id, true); } });
+    if (SI[id]) return el('button', { class: 'link', type: 'button', text: id, title: SI[id].label || '', onclick: function () { selectStage(id, true); } });
+    if (CI[id]) return el('span', { text: id, title: CI[id].text || '' });
+    return el('span', { text: id });
+  }
+  function refList(ids) {
+    var out = el('span');
+    arr(ids).forEach(function (id, i) { if (i) out.appendChild(document.createTextNode('、')); out.appendChild(refButton(id)); });
+    return out;
+  }
+
+  // ------------------------------------------------ 头部
+  function header() {
+    var p = C.problem || {};
+    return el('header', null, [
+      el('h1', { text: C.title || C.id }),
+      el('p', { class: 'meta' }, [
+        '案例 ', el('code', { text: C.id || '' }),
+        ' · 状态：' + (L.case_status[C.status] || C.status || '—'),
+        ' · ' + (L.query[p.query_type] || p.query_type || ''),
+        ' · 最后更新：' + (C.updated || '—'),
+        ' · 共 ' + rounds.length + ' 轮（最新第 ' + (latest || '—') + ' 轮）',
+        ' · 生成于 ' + D.generated + '，每 10 秒自动刷新'
+      ]),
+      p.goal ? el('p', { class: 'meta' }, ['目标：' + p.goal]) : null
+    ]);
+  }
+  function topBoxes() {
+    var pend = arr(C.pending), run = arr(C.running);
+    var pl = el('ul');
+    pend.forEach(function (x) {
+      var about = arr(x.about);
+      pl.appendChild(el('li', null, [
+        el('strong', { text: (x.id || '') + ' ' }), x.question || '',
+        about.length ? el('span', { class: 'meta' }, ['（关于 ', refList(about), '）']) : null,
+        x.since_round ? el('span', { class: 'meta', text: ' 自第 ' + x.since_round + ' 轮' }) : null
+      ]));
+    });
+    if (!pend.length) pl.appendChild(el('li', { text: '暂无' }));
+    var rl = el('ul');
+    run.forEach(function (x) {
+      rl.appendChild(el('li', null, [
+        el('strong', { text: x.label || '' }),
+        x.report_path ? el('span', null, [' → ', el('code', { text: x.report_path })]) : null,
+        x.started ? el('span', { class: 'meta', text: ' （开始于 ' + x.started + '）' }) : null
+      ]));
+    });
+    if (!run.length) rl.appendChild(el('li', { text: '暂无' }));
+    return el('div', { class: 'top' }, [
+      el('section', { class: 'card pending', 'aria-labelledby': 'h-pend' }, [el('h2', { id: 'h-pend', text: '等你决定（' + pend.length + '）' }), pl]),
+      el('section', { class: 'card running', 'aria-labelledby': 'h-run' }, [el('h2', { id: 'h-run', text: '正在后台运行（' + run.length + '）' }), rl])
+    ]);
+  }
+
+  // ------------------------------------------------ 阶段图
+  var BW = 200, BH = 54, GX = 24, GY = 36, PAD = 10;
+  function stageSection() {
+    var sec = el('section', { class: 'card', 'aria-labelledby': 'h-stage' }, [el('h2', { id: 'h-stage', text: '阶段图' })]);
+    if (!stages.length) { sec.appendChild(el('p', { class: 'meta', text: 'case.json 里还没有 stages。' })); return sec; }
+    var lg = el('div', { class: 'legend' });
+    Object.keys(L.stage_status).forEach(function (k) {
+      lg.appendChild(el('span', null, [el('span', { class: 'sw s-' + k, text: L.stage_mark[k] }), L.stage_status[k]]));
+    });
+    lg.appendChild(el('span', { text: '箭头：依赖 → 后续阶段；点击阶段看产出与缺口' }));
+    sec.appendChild(lg);
+    // 分层：层号 = 依赖链最长长度
+    var layer = {}, busy = {};
+    function lay(id) {
+      if (layer[id] !== undefined) return layer[id];
+      if (busy[id]) return 0;
+      busy[id] = true;
+      var deps = arr(SI[id] && SI[id].depends_on).filter(function (d) { return SI[d]; });
+      var v = deps.length ? 1 + Math.max.apply(null, deps.map(lay)) : 0;
+      busy[id] = false;
+      layer[id] = v;
+      return v;
+    }
+    stages.forEach(function (s) { if (s.id) lay(s.id); });
+    // 没有依赖的阶段放到最早的后续阶段上一层，箭头就不会穿过无关的阶段
+    stages.forEach(function (s) {
+      if (!s.id || arr(s.depends_on).some(function (d) { return SI[d]; })) return;
+      var next = stages.filter(function (t) { return arr(t.depends_on).indexOf(s.id) >= 0; }).map(function (t) { return layer[t.id]; });
+      if (next.length) layer[s.id] = Math.max(0, Math.min.apply(null, next) - 1);
+    });
+    var rows = [];
+    stages.forEach(function (s) { if (!s.id) return; var l = layer[s.id]; (rows[l] = rows[l] || []).push(s); });
+    rows = rows.map(function (r) { return r || []; });
+    var maxw = Math.max.apply(null, rows.map(function (r) { return r.length; }));
+    var W = PAD * 2 + maxw * BW + (maxw - 1) * GX, H = PAD * 2 + rows.length * BH + (rows.length - 1) * GY;
+    var pos = {};
+    rows.forEach(function (r, li) {
+      var rw = r.length * BW + (r.length - 1) * GX, x0 = (W - rw) / 2;
+      r.forEach(function (s, i) { pos[s.id] = { x: x0 + i * (BW + GX), y: PAD + li * (BH + GY), l: li }; });
+    });
+    var map = el('div', { id: 'stagemap', role: 'group', 'aria-label': '阶段依赖图' });
+    map.style.height = (H + 4) + 'px';
+    var inner = el('div');
+    inner.style.position = 'relative'; inner.style.width = W + 'px'; inner.style.height = H + 'px';
+    // 直接搬用页面里的空 SVG（含箭头 marker），避免在脚本里写命名空间地址
+    var svg = document.getElementById('svg-proto');
+    svg.parentNode.removeChild(svg);
+    svg.removeAttribute('id'); svg.style.display = '';
+    svg.setAttribute('width', W); svg.setAttribute('height', H);
+    var NS = svg.namespaceURI;
+    stages.forEach(function (s) {
+      arr(s.depends_on).forEach(function (d) {
+        var a = pos[d], b = pos[s.id];
+        if (!a || !b) return;
+        var x1 = a.x + BW / 2, y1 = a.y + BH, x2 = b.x + BW / 2, y2 = b.y - 2, dpath;
+        if (b.l - a.l > 1 && Math.abs(x1 - x2) < 1) {
+          var bx = Math.max(x1, x2) + BW / 2 + 30;
+          dpath = 'M' + (a.x + BW) + ' ' + (a.y + BH / 2) + ' C' + bx + ' ' + (a.y + BH / 2) + ' ' + bx + ' ' + (b.y + BH / 2) + ' ' + (b.x + BW + 2) + ' ' + (b.y + BH / 2);
+        } else {
+          var my = (y1 + y2) / 2;
+          dpath = 'M' + x1 + ' ' + y1 + ' C' + x1 + ' ' + my + ' ' + x2 + ' ' + my + ' ' + x2 + ' ' + y2;
+        }
+        var p = document.createElementNS(NS, 'path');
+        p.setAttribute('d', dpath); p.setAttribute('fill', 'none'); p.setAttribute('stroke', '#555');
+        p.setAttribute('stroke-width', '1.6'); p.setAttribute('marker-end', 'url(#arrowhead)');
+        svg.appendChild(p);
+      });
+    });
+    inner.appendChild(svg);
+    stages.forEach(function (s) {
+      var q = pos[s.id];
+      if (!q) return;
+      var st = L.stage_status[s.status] ? s.status : 'todo';
+      var b = el('button', {
+        type: 'button', class: 'stg s-' + st, 'data-stage': s.id, 'aria-pressed': state.stage === s.id ? 'true' : 'false',
+        'aria-label': s.id + ' ' + (s.label || '') + '，' + (L.stage_status[s.status] || s.status),
+        onclick: function () { selectStage(s.id); }
+      }, [
+        el('span', { text: (L.stage_mark[s.status] || '?') + ' ' + s.id + ' ' + (s.label || '') }),
+        el('small', { text: L.stage_status[s.status] || ('未知状态 ' + s.status) })
+      ]);
+      b.style.left = q.x + 'px'; b.style.top = q.y + 'px';
+      inner.appendChild(b);
+    });
+    map.appendChild(inner);
+    sec.appendChild(el('div', { id: 'stagewrap' }, [map, el('div', { id: 'stagedetail', class: 'panel', 'aria-live': 'polite' })]));
+    return sec;
+  }
+  function renderStageDetail() {
+    var box = document.getElementById('stagedetail');
+    if (!box) return;
+    box.textContent = '';
+    var s = SI[state.stage];
+    if (!s) { box.appendChild(el('p', { class: 'meta', text: '点击左侧的阶段查看已有产出和还差什么。' })); return; }
+    box.appendChild(el('h3', { text: s.id + ' ' + (s.label || '') }));
+    var outs = el('ul');
+    arr(s.outputs).forEach(function (o) { outs.appendChild(el('li', null, [/[\/\\]|\.md$|\.json$/.test(o) ? el('code', { text: o }) : o])); });
+    if (!arr(s.outputs).length) outs.appendChild(el('li', { text: '—' }));
+    var pend = arr(C.pending).filter(function (p) { return arr(p.about).indexOf(s.id) >= 0; });
+    box.appendChild(el('dl', null, [
+      el('dt', { text: '状态' }), el('dd', { text: (L.stage_mark[s.status] || '') + ' ' + (L.stage_status[s.status] || s.status) }),
+      el('dt', { text: '依赖' }), el('dd', null, [arr(s.depends_on).length ? refList(s.depends_on) : '—']),
+      el('dt', { text: '已有产出' }), el('dd', null, [outs]),
+      el('dt', { text: '还差什么' }), el('dd', { text: s.missing || '—' }),
+      el('dt', { text: '相关节点' }), el('dd', null, [arr(s.nodes).length ? refList(s.nodes) : '—']),
+      pend.length ? el('dt', { text: '等你决定' }) : null,
+      pend.length ? el('dd', { text: pend.map(function (p) { return p.id + ' ' + p.question; }).join('；') }) : null
+    ]));
+  }
+  function selectStage(id, scroll) {
+    state.stage = id; save();
+    document.querySelectorAll('.stg').forEach(function (b) { b.setAttribute('aria-pressed', b.getAttribute('data-stage') === id ? 'true' : 'false'); });
+    renderStageDetail();
+    var b = document.querySelector('.stg[data-stage="' + CSS.escape(id) + '"]');
+    if (scroll && b) { b.scrollIntoView({ block: 'center' }); b.focus(); }
+  }
+
+  // ------------------------------------------------ 解空间树
+  function treeSection() {
+    var sec = el('section', { class: 'card', 'aria-labelledby': 'h-tree' }, [el('h2', { id: 'h-tree', text: '解空间' })]);
+    var lg = el('div', { class: 'legend' });
+    L.node_order.forEach(function (s) { lg.appendChild(el('span', null, [el('span', { class: 'sw n-' + s, text: mark(s) }), stLabel(s)])); });
+    lg.appendChild(el('span', null, [el('span', { class: 'badge', text: '本轮' }), '第 ' + (latest || '—') + ' 轮新增或改动']));
+    sec.appendChild(lg);
+    sec.appendChild(el('p', { class: 'meta', text: '[~] 搁置（软偏好或依据未核实，可重审）　[x] 淘汰（违反已确认的硬约束）　[!] 失败（现实尝试或验证失败）' }));
+    var hide = el('input', { type: 'checkbox', id: 'f-hide' });
+    hide.checked = !!state.hide;
+    hide.addEventListener('change', function () { state.hide = hide.checked; save(); renderTree(); });
+    var who = el('select', { id: 'f-who' }, [
+      el('option', { value: 'all', text: '全部' }), el('option', { value: 'user', text: '用户提出' }), el('option', { value: 'ai', text: 'AI 提出' })
+    ]);
+    who.value = state.who;
+    who.addEventListener('change', function () { state.who = who.value; save(); renderTree(); });
+    var q = el('input', { type: 'search', id: 'f-q', placeholder: '搜索 ID、内容、备注' });
+    q.value = state.q;
+    q.addEventListener('input', function () { state.q = q.value; save(); renderTree(); });
+    q.addEventListener('focus', function () { state.qFocus = true; save(); });
+    q.addEventListener('blur', function () { state.qFocus = false; save(); });
+    var bExp = el('button', { type: 'button', text: '全部展开', onclick: function () { state.collapsed = {}; save(); renderTree(); } });
+    var bCol = el('button', { type: 'button', text: '全部折叠', onclick: function () {
+      state.collapsed = {}; nodes.forEach(function (n) { if (kids[n.id] && n.parent) state.collapsed[n.id] = true; }); save(); renderTree();
+    } });
+    sec.appendChild(el('div', { class: 'controls' }, [
+      el('label', null, [hide, ' 隐藏淘汰与失败']),
+      el('label', null, ['提出者 ', who]),
+      el('label', null, ['搜索 ', q]),
+      bExp, bCol, el('span', { id: 'tree-count', class: 'meta' })
+    ]));
+    sec.appendChild(el('ul', { class: 'tree', id: 'tree', 'aria-label': '解空间树' }));
+    return sec;
+  }
+  function outOf(n) {
+    for (var cur = n, i = 0; cur && i <= nodes.length; cur = N[cur.parent], i++) if (cur.status === 'pruned' || cur.status === 'failed') return true;
+    return false;
+  }
+  function renderTree() {
+    var ul = document.getElementById('tree');
+    if (!ul) return;
+    var active = document.activeElement, focusId = active && active.getAttribute && active.getAttribute('data-focus');
+    ul.textContent = '';
+    var q = (state.q || '').trim().toLowerCase(), filtering = !!q || state.who !== 'all';
+    var match = {}, show = {}, nm = 0;
+    nodes.forEach(function (n) {
+      if (state.hide && outOf(n)) return;
+      var ok = (state.who === 'all' || n.proposed_by === state.who) &&
+        (!q || [n.id, n.label, n.note, D.reasons[n.id]].join(' ').toLowerCase().indexOf(q) >= 0);
+      if (!ok) return;
+      match[n.id] = true; nm++;
+      for (var cur = n, i = 0; cur && i <= nodes.length; cur = N[cur.parent], i++) show[cur.id] = true;
+    });
+    function item(n, depth) {
+      var cs = (kids[n.id] || []).filter(function (c) { return show[c.id]; });
+      var collapsed = !filtering && !!state.collapsed[n.id];
+      var row = el('div', { class: 'row' });
+      if (cs.length) {
+        row.appendChild(el('button', {
+          type: 'button', class: 'tog', 'aria-expanded': collapsed ? 'false' : 'true', 'data-focus': 't-' + n.id,
+          'aria-label': (collapsed ? '展开 ' : '折叠 ') + n.id + '（' + cs.length + ' 个子节点）', text: collapsed ? '▸' : '▾',
+          onclick: function () { state.collapsed[n.id] = !collapsed; save(); renderTree(); }
+        }));
+      } else row.appendChild(el('span', { class: 'spacer', 'aria-hidden': 'true' }));
+      var kind = (n.kind === 'candidate' || n.kind === 'goal') ? '' : '〔' + (L.kind[n.kind] || n.kind || '') + '〕';
+      var who = n.proposed_by === 'user' && n.kind !== 'goal' ? '（用户提出）' : '';
+      var reason = D.reasons[n.id] || '';
+      var jump = D.jumps[n.id];
+      var btn = el('button', {
+        type: 'button', class: 'nb n-' + (n.status || 'open') + (filtering && !match[n.id] ? ' ctx' : ''), 'data-focus': 'n-' + n.id,
+        'aria-pressed': state.sel === n.id ? 'true' : 'false', onclick: function () { selectNode(n.id); }
+      }, [
+        el('span', { class: 'mark', text: mark(n.status) }), ' ', el('span', { class: 'nid', text: n.id }), ' ',
+        kind, n.label || '', who, ' —— ' + stLabel(n.status),
+        changedLatest(n) ? el('span', { class: 'badge', text: '本轮' }) : null,
+        filtering && !match[n.id] ? el('span', { class: 'meta', text: '（上层，未匹配）' }) : null,
+        reason || jump ? el('span', { class: 'reason', text: (reason ? '理由：' + reason : '') + (jump ? '  ⟶ 冲突核 ' + jump : '') }) : null
+      ]);
+      row.appendChild(btn);
+      var li = el('li', null, [row]);
+      if (cs.length && !collapsed) {
+        var sub = el('ul', { 'aria-label': n.id + ' 的子节点' });
+        cs.forEach(function (c) { sub.appendChild(item(c, depth + 1)); });
+        li.appendChild(sub);
+      }
+      return li;
+    }
+    (kids[''] || []).forEach(function (r) { if (show[r.id]) ul.appendChild(item(r, 0)); });
+    document.getElementById('tree-count').textContent = filtering ? ('匹配 ' + nm + ' 个节点') : ('共 ' + nodes.length + ' 个节点');
+    if (focusId) { var f = ul.querySelector('[data-focus="' + CSS.escape(focusId) + '"]'); if (f) f.focus(); }
+  }
+
+  // ------------------------------------------------ 节点详情
+  function cLine(id) {
+    var c = CI[id];
+    if (!c) return el('li', { text: id + '（不存在）' });
+    return el('li', null, [el('strong', { text: id }), ' ' + (c.kind === 'hard' ? '硬' : '软') + ' · ' + (L.basis[c.basis] || c.basis || '依据未标') + ' · ',
+      el('span', { class: c.verified ? 'ok' : 'no', text: c.verified ? '已确认' : '未确认' }), '：' + (c.text || '')]);
+  }
+  function evLine(id) {
+    var e = EV[id];
+    if (!e) return el('li', { text: id + '（不存在）' });
+    return el('li', null, [el('strong', { text: id }), ' ', el('span', { class: e.verified ? 'ok' : 'no', text: e.verified ? '✓ 已核实' : '✗ 未核实' }),
+      ' （' + (e.type || '') + '）' + (e.claim || ''), e.source ? el('span', { class: 'meta', text: ' —— 来源：' + e.source }) : null]);
+  }
+  function copyText(text, status) {
+    function done(ok) { status.textContent = ok ? '已复制：' + text : '复制失败，请手动复制：' + text; }
+    function fallback() {
+      var ta = el('textarea', { readonly: true, 'aria-hidden': 'true' });
+      ta.value = text; ta.style.position = 'fixed'; ta.style.left = '-9999px';
+      document.body.appendChild(ta); ta.select();
+      var ok = false; try { ok = document.execCommand('copy'); } catch (e) {}
+      document.body.removeChild(ta); return ok;
+    }
+    if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(function () { done(true); }, function () { done(fallback()); });
+    else done(fallback());
+  }
+  function renderDetail() {
+    var box = document.getElementById('detail');
+    box.textContent = '';
+    box.appendChild(el('h2', { id: 'h-detail', text: '节点详情' }));
+    var n = N[state.sel];
+    if (!n) { box.appendChild(el('p', { class: 'meta', text: '点击解空间里的节点查看详情；"复制引用"后可以直接粘贴到对话里。' })); return; }
+    var ref = n.id + '：' + (n.label || '');
+    var status = el('span', { class: 'meta', role: 'status' });
+    box.appendChild(el('h3', { text: n.id + ' ' + (n.label || '') }));
+    box.appendChild(el('p', null, [el('button', { type: 'button', class: 'copy', text: '复制引用', onclick: function () { copyText(ref, status); } }), ' ', status]));
+    var vs = arr(C.verifications).filter(function (v) { return v.target === n.id; });
+    var ds = arr(C.disagreements).filter(function (d) { return d.about === n.id || arr(n.pruned_by).concat(arr(n.parked_by)).indexOf(d.about) >= 0; });
+    var ks = arr(C.conflicts).filter(function (k) { return arr(k.failed).indexOf(n.id) >= 0 || k.jump_to === n.id; });
+    var ls = arr(C.links).filter(function (l) { return l.from === n.id || l.to === n.id; });
+    var ss = stages.filter(function (s) { return arr(s.nodes).indexOf(n.id) >= 0; });
+    var dl = el('dl', null, [
+      el('dt', { text: '类型' }), el('dd', { text: L.kind[n.kind] || n.kind || '—' }),
+      el('dt', { text: '状态' }), el('dd', { text: mark(n.status) + ' ' + stLabel(n.status) + (changedLatest(n) ? '（本轮有变化）' : '') }),
+      el('dt', { text: '提出者' }), el('dd', { text: n.proposed_by === 'user' ? '用户' : n.proposed_by === 'ai' ? 'AI' : '—' }),
+      el('dt', { text: '首次出现' }), el('dd', { text: n.round ? '第 ' + n.round + ' 轮' : '—' }),
+      el('dt', { text: '父节点' }), el('dd', null, [n.parent ? refButton(n.parent) : '—（根）']),
+      el('dt', { text: '子节点' }), el('dd', null, [(kids[n.id] || []).length ? refList((kids[n.id] || []).map(function (c) { return c.id; })) : '—']),
+      ss.length ? el('dt', { text: '所属阶段' }) : null, ss.length ? el('dd', null, [refList(ss.map(function (s) { return s.id; }))]) : null,
+      el('dt', { text: '备注' }), el('dd', { text: n.note || '—' }),
+      el('dt', { text: '理由' }), el('dd', { text: D.reasons[n.id] || '—' })
+    ]);
+    box.appendChild(dl);
+    function block(title, items) {
+      if (!items.length) return;
+      box.appendChild(el('h3', { text: title }));
+      box.appendChild(el('ul', null, items));
+    }
+    block('淘汰依据（pruned_by）', arr(n.pruned_by).map(cLine));
+    block('搁置依据（parked_by）', arr(n.parked_by).map(cLine));
+    var pr = n.park_reference;
+    if (pr) block('搁置时的比较（park_reference）', [el('li', null, ['维度 ' + (pr.measure || '—') + '（' + (pr.direction === 'higher' ? '越高越好' : '越低越好') + '）；参照 ',
+      arr(pr.compared_to).length ? refList(pr.compared_to) : '—', pr.external ? '；台账外：' + pr.external : '', pr.note ? '；' + pr.note : ''])]);
+    block('证据', arr(n.evidence).map(evLine));
+    block('原问题里的验证', vs.map(function (v) {
+      return el('li', null, [el('strong', { text: v.id }), ' ', el('span', { class: v.result === 'pass' ? 'ok' : v.result === 'fail' ? 'no' : '', text: v.result || '' }),
+        ' ' + (v.method || '') + (v.date ? '（' + v.date + '）' : '') + (v.note ? '：' + v.note : ''), arr(v.evidence).length ? el('ul', null, arr(v.evidence).map(evLine)) : null]);
+    }));
+    block('相关分歧', ds.map(function (d) {
+      return el('li', null, [el('strong', { text: d.id }), ' 第 ' + (d.round || '?') + ' 轮 · ' + (L.dis_basis[d.basis] || d.basis || '') + ' · 结果：' + (L.dis_resolution[d.resolution] || d.resolution || ''),
+        el('ul', null, [el('li', { text: '用户：' + (d.user_position || '—') }), el('li', { text: 'AI：' + (d.ai_position || '—') }),
+          el('li', { text: '检验：' + (d.test || '—') + (d.verification ? '（' + d.verification + '）' : '') }), d.note ? el('li', { text: '备注：' + d.note }) : null])]);
+    }));
+    block('冲突核', ks.map(function (k) {
+      return el('li', null, [el('strong', { text: k.id }), ' 共同原因「' + (k.common_cause || '') + '」；一起失败：', refList(k.failed), '；跳到 ', k.jump_to ? refButton(k.jump_to) : '—']);
+    }));
+    block('其他关系', ls.map(function (l) {
+      return el('li', null, [refButton(l.from), ' —' + (l.type || '') + '→ ', refButton(l.to), l.note ? '：' + l.note : '']);
+    }));
+    var hs = arr(n.history);
+    box.appendChild(el('h3', { text: '历史（' + hs.length + '）' }));
+    if (hs.length) {
+      box.appendChild(el('table', null, [el('thead', null, [el('tr', null, [el('th', { scope: 'col', text: '轮' }), el('th', { scope: 'col', text: '状态' }), el('th', { scope: 'col', text: '说明' })])]),
+        el('tbody', null, hs.map(function (h) { return el('tr', null, [el('td', { text: h.round === undefined ? '—' : h.round }), el('td', { text: mark(h.status) + ' ' + stLabel(h.status) }), el('td', { text: h.note || '—' })]); }))]));
+    } else box.appendChild(el('p', { class: 'meta', text: '无记录' }));
+  }
+  function selectNode(id, scroll) {
+    state.sel = id;
+    if (scroll) {  // 展开祖先，保证节点可见
+      for (var cur = N[N[id] && N[id].parent], i = 0; cur && i <= nodes.length; cur = N[cur.parent], i++) delete state.collapsed[cur.id];
+    }
+    save(); renderTree(); renderDetail();
+    var b = document.querySelector('[data-focus="n-' + CSS.escape(id) + '"]');
+    if (scroll && b) { b.scrollIntoView({ block: 'center' }); b.focus(); }
+    else if (window.matchMedia('(max-width:1000px)').matches) document.getElementById('detail').scrollIntoView();
+  }
+
+  // ------------------------------------------------ 表格
+  function table(headers, rows) {
+    return el('div', { style: 'overflow:auto' }, [el('table', null, [
+      el('thead', null, [el('tr', null, headers.map(function (h) { return el('th', { scope: 'col', text: h }); }))]),
+      el('tbody', null, rows.map(function (r) { return el('tr', null, r.map(function (c) { return el('td', null, [c instanceof Node ? c : txt(c)]); })); }))
+    ])]);
+  }
+  function det(id, title, body, openDefault) {
+    var d = el('details', { class: 'card', id: id }, [el('summary', null, [el('h2', { text: title, style: 'display:inline;font-size:16px' })]), body]);
+    d.open = state.open[id] === undefined ? !!openDefault : !!state.open[id];
+    d.addEventListener('toggle', function () { state.open[id] = d.open; save(); });
+    return d;
+  }
+  function yes(v, a, b) { return el('span', { class: v ? 'ok' : 'no', text: v ? a : b }); }
+  function tables() {
+    var cs = arr(C.constraints), ds = arr(C.disagreements), es = arr(C.evidence);
+    return [
+      det('t-cons', '约束（' + cs.length + '）', table(['ID', '约束', '硬/软', '依据', '已确认', '证据', '来源'], cs.map(function (c) {
+        return [c.id, c.text, c.kind === 'hard' ? '硬' : '软', L.basis[c.basis] || c.basis, yes(c.verified, '是', '否'), c.evidence, (c.source || '') + (c.quote ? '：「' + c.quote + '」' : '')];
+      })), false),
+      det('t-dis', '人机分歧（' + ds.length + '）', table(['ID', '轮次', '关于', '类别', '用户立场', 'AI 立场', '检验', '结果', '依据的验证', '备注'], ds.map(function (d) {
+        return [d.id, d.round, d.about ? refButton(d.about) : '—', L.dis_basis[d.basis] || d.basis, d.user_position, d.ai_position, d.test, L.dis_resolution[d.resolution] || d.resolution, d.verification, d.note];
+      })), false),
+      det('t-ev', '证据（' + es.length + '）', table(['ID', '断言', '类型', '已核实', '来源', '日期'], es.map(function (e) {
+        return [e.id, e.claim, e.type, yes(e.verified, '✓ 是', '✗ 否'), e.source, e.date];
+      })), false)
+    ];
+  }
+
+  // ------------------------------------------------ 论断台账
+  function claimsSection() {
+    var cls = arr(C.claims); if (!cls.length) return null;
+    var CLI = byId(cls), G = D.claim_grades || {}, ED = D.claim_edges || [];
+    var alerts = D.warnings.filter(function (w) { return /^规则·连带|^提醒·改引用/.test(w); });
+    var box = el('div');
+    if (alerts.length) box.appendChild(el('ul', null, alerts.map(function (w) { return el('li', { class: w.indexOf('规则') === 0 ? 'err' : 'warn', text: w }); })));
+    var info = el('div', { class: 'card', style: 'margin-top:8px' }, [el('p', { class: 'meta', text: '点论断 ID 看详情。等级由验证记录自动计算：V0 未验证、V1 核查通过、V2 可复跑、V3 独立检验；覆盖弱于论断时降一级。' })]);
+    function showClaim(id) {
+      var c = CLI[id]; info.textContent = ''; state.claimSel = id; save();
+      var cov = c.coverage || {};
+      var vs = arr(C.verifications).filter(function (v) { return v.target === id; });
+      var up = ED.filter(function (e) { return e[0] === id; }), dn = ED.filter(function (e) { return e[1] === id; });
+      function cl(eid) { return el('button', { class: 'link', type: 'button', text: eid, onclick: function () { showClaim(eid); } }); }
+      [el('h3', { text: id + '：' + (c.statement || '') }),
+       el('p', { text: '状态：' + (D.claim_status[c.status || 'current'] || c.status) + ' · 等级 V' + G[id] + (c.supersedes ? ' · 取代 ' + c.supersedes : '') }),
+       el('p', null, ['关于：', c.about ? refList(c.about) : '—']),
+       el('p', { text: '证据：' + txt(c.evidence) }),
+       el('p', { text: '已核对：' + (cov.checked || '—') }),
+       el('p', { text: '未覆盖：' + txt(cov.not_covered) + (cov.weaker_than_claim ? '（弱于论断，等级已降一级）' : '') }),
+       el('p', null, ['上游：'].concat(up.length ? up.map(function (e) { return el('span', null, [cl(e[1]), '（' + D.edge_types[e[2]] + '） ']); }) : ['—'])),
+       el('p', null, ['下游：'].concat(dn.length ? dn.map(function (e) { return el('span', null, [cl(e[0]), '（' + D.edge_types[e[2]] + '） ']); }) : ['—'])),
+       el('p', { text: '验证：' + (vs.length ? vs.map(function (v) { return v.id + ' ' + v.result + (v.independent ? '·独立' : '') + (v.rerun ? '·可复跑' : '') + '：' + (v.method || ''); }).join('；') : '—') }),
+       c.withdrawal ? el('p', { class: 'err', text: '撤回：' + (c.withdrawal.date || '') + ' ' + (c.withdrawal.scope === 'proof' ? '（理由失效，陈述未判定）' : '（陈述作废）') + ' 根因：' + (c.withdrawal.root_cause || '—') }) : null,
+       arr(c.history).length ? el('ul', null, arr(c.history).map(function (h) { return el('li', { text: (h.round || h.date || '') + ' ' + h.kind + '：' + (h.note || '') }); })) : null
+      ].forEach(function (x) { if (x) info.appendChild(x); });
+    }
+    box.appendChild(table(['ID', '论断', '状态', '等级', '上游', '下游'], cls.map(function (c) {
+      return [el('button', { class: 'link', type: 'button', text: c.id, onclick: function () { showClaim(c.id); } }), c.statement,
+        D.claim_status[c.status || 'current'] || c.status, el('span', { class: 'badge', text: 'V' + G[c.id] }),
+        ED.filter(function (e) { return e[0] === c.id; }).map(function (e) { return e[1] + '·' + D.edge_types[e[2]]; }).join('、') || '—',
+        ED.filter(function (e) { return e[1] === c.id; }).map(function (e) { return e[0] + '·' + D.edge_types[e[2]]; }).join('、') || '—'];
+    })));
+    box.appendChild(info);
+    if (state.claimSel && CLI[state.claimSel]) showClaim(state.claimSel);
+    return det('t-claims', '论断台账（' + cls.length + '）', box, true);
+  }
+  // ------------------------------------------------ 探索过程
+  function roundsSection() {
+    var ol = el('ol', { class: 'rounds', reversed: true });
+    rounds.slice().reverse().forEach(function (r) {
+      var key = String(r.n), full = r.user || '', LIM = 80, long = full.length > LIM, open = !!state.roundsOpen[key];
+      var words = el('span', { text: long && !open ? full.slice(0, LIM) + '…' : full });
+      var tog = long ? el('button', { type: 'button', class: 'link', 'aria-expanded': open ? 'true' : 'false', text: open ? '收起' : '展开',
+        onclick: function () {
+          open = !open; state.roundsOpen[key] = open; save();
+          words.textContent = open ? full : full.slice(0, LIM) + '…';
+          tog.textContent = open ? '收起' : '展开'; tog.setAttribute('aria-expanded', open ? 'true' : 'false');
+        } }) : null;
+      var a = r.real_world_attempt;
+      ol.appendChild(el('li', { class: r.correction ? 'corr' : '' }, [
+        el('h3', null, ['第 ' + r.n + ' 轮', r.date ? el('span', { class: 'meta', text: ' · ' + r.date }) : null,
+          r.correction ? el('span', { class: 'badge corr', text: '用户纠正' }) : null, r.n === latest ? el('span', { class: 'badge', text: '最新' }) : null]),
+        el('p', { style: 'margin:2px 0' }, ['用户：', words, tog ? ' ' : null, tog]),
+        arr(r.actions).length ? el('ul', null, arr(r.actions).map(function (x) { return el('li', { text: x }); })) : null,
+        arr(r.questions).length ? el('p', { class: 'meta', style: 'margin:2px 0', text: '问用户：' + arr(r.questions).join('；') }) : null,
+        a ? el('p', { style: 'margin:2px 0', text: '现实尝试：' + (a.target || '') + ' → ' + (a.result || '') + (a.note ? '（' + a.note + '）' : '') }) : null
+      ]));
+    });
+    return det('t-rounds', '探索过程（' + rounds.length + ' 轮，最新在上）', ol, true);
+  }
+
+  function metricsSection() {
+    return det('t-metrics', '指标', table(['指标', '值'], D.metrics.map(function (kv) { return [kv[0], kv[1] === null ? '—' : String(kv[1])]; })), true);
+  }
+  function validationSection() {
+    var ul = el('ul');
+    D.errors.forEach(function (e) { ul.appendChild(el('li', { class: 'err', text: '错误：' + e })); });
+    D.warnings.forEach(function (w) { ul.appendChild(el('li', { class: 'warn', text: '提醒：' + w })); });
+    if (!D.errors.length && !D.warnings.length) ul.appendChild(el('li', { class: 'ok', text: '全部通过。' }));
+    return det('t-check', '校验：错误 ' + D.errors.length + ' 条，提醒 ' + D.warnings.length + ' 条', ul, D.errors.length > 0);
+  }
+
+  // ------------------------------------------------ 组装
+  app.appendChild(header());
+  app.appendChild(live);
+  app.appendChild(topBoxes());
+  app.appendChild(stageSection());
+  app.appendChild(el('div', { class: 'cols' }, [treeSection(), el('aside', { id: 'detail', class: 'card sticky panel', 'aria-labelledby': 'h-detail' })]));
+  var cs_ = claimsSection(); if (cs_) app.appendChild(cs_);
+  tables().forEach(function (t) { app.appendChild(t); });
+  app.appendChild(roundsSection());
+  app.appendChild(metricsSection());
+  app.appendChild(validationSection());
+  renderTree(); renderDetail(); renderStageDetail();
+  if (state.qFocus) { var qi = document.getElementById('f-q'); qi.focus(); qi.setSelectionRange(qi.value.length, qi.value.length); }
+  window.scrollTo(0, state.scroll || 0);
+  var t = null;
+  window.addEventListener('scroll', function () { clearTimeout(t); t = setTimeout(save, 150); });
+  window.addEventListener('pagehide', save);
+  window.addEventListener('beforeunload', save);
+})();
+</script>
+</body>
+</html>
+"""
+
+
 # ---------------------------------------------------------------- 命令
 
 def cmd_new(args):
@@ -769,7 +1675,18 @@ def cmd_render(args):
         print(f"错误：{e}")
     for w in warnings:
         print(f"提醒：{w}")
-    print(f"已写入：{f.parent / 'tree.md'}，{f.parent / 'graph.canvas'}")
+    (f.parent / "progress.html").write_text(render_html(case, errors, warnings), encoding="utf-8")
+    print(f"已写入：{f.parent / 'tree.md'}，{f.parent / 'graph.canvas'}，{f.parent / 'progress.html'}")
+    sys.exit(1 if errors else 0)
+
+
+def cmd_html(args):
+    f, case = load_case(args.case)
+    errors, warnings = check(case)
+    (f.parent / "progress.html").write_text(render_html(case, errors, warnings), encoding="utf-8")
+    for e in errors:
+        print(f"错误：{e}")
+    print(f"已写入：{f.parent / 'progress.html'}")
     sys.exit(1 if errors else 0)
 
 
@@ -817,7 +1734,7 @@ def main():
     p.add_argument("--origin", default="live", choices=["live", "retro"])
     p.add_argument("--root")
     p.set_defaults(func=cmd_new)
-    for name, fn in (("check", cmd_check), ("render", cmd_render)):
+    for name, fn in (("check", cmd_check), ("render", cmd_render), ("html", cmd_html)):
         p = sub.add_parser(name)
         p.add_argument("case")
         p.set_defaults(func=fn)

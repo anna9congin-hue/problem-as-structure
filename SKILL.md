@@ -120,6 +120,7 @@ investment_method/problem_cases/
     case.json                 # 唯一真源，由你维护
     tree.md                   # 自动生成：给人读
     graph.canvas              # 自动生成：Obsidian 画布
+    progress.html             # 自动生成：离线单文件进展面板（浏览器打开，每 10 秒自动刷新）
 ```
 
 字段说明见 `references/case_schema.md`；完整示例见案例库里的 `2026-10-14_itin-credit-builder/case.json`。
@@ -130,7 +131,8 @@ investment_method/problem_cases/
 
 ```bash
 python3 <skill目录>/scripts/case_tool.py new --slug <英文短名> --title "<标题>" [--origin retro]
-python3 <skill目录>/scripts/case_tool.py render <案例目录>   # 校验 + 生成 tree.md 与 graph.canvas，并打印状态树
+python3 <skill目录>/scripts/case_tool.py render <案例目录>   # 校验 + 生成 tree.md、graph.canvas 与 progress.html，并打印状态树
+python3 <skill目录>/scripts/case_tool.py html   <案例目录>   # 只生成 progress.html
 python3 <skill目录>/scripts/case_tool.py check  <案例目录>   # 只校验
 python3 <skill目录>/scripts/case_tool.py index               # 重建 INDEX.md
 ```
@@ -140,6 +142,7 @@ python3 <skill目录>/scripts/case_tool.py index               # 重建 INDEX.md
 - 每一轮只要结构有变化（新约束、新节点、状态变化、新冲突、新验证），就更新 `case.json`、追加一条 `rounds`、更新 `updated`，然后运行 `render`。
 - `render` 报的"错误"必须当轮改掉；"提醒"里以"规则·"开头的是方法规则，下一步必须照做。
 - 结案后运行 `index`。
+- 求解过程中产生要对外宣称的话（论文主张、投资论点）时，记进 `claims[]`，用 `links` 的 `depends_on` 加 `edge`（conclusion、method、cites）连上它依赖的论断。等级由脚本按验证记录计算，不手填。上游论断被撤回时，先处理 `规则·连带` 列出的下游论断，再回答。
 - 当前环境不能读写文件或运行脚本时：照常按方法推进，每轮回复末尾附上完整的 `case.json`（放在 json 代码块里），请用户保存到案例库。
 
 ### 记录要诚实
@@ -163,6 +166,8 @@ python3 <skill目录>/scripts/case_tool.py index               # 重建 INDEX.md
 6. **需要你回答的**：最多 5 个，是/否题或反例题优先。
 
 用户可以直接指着节点说话（"N13 不对"、"重审 N231"、"C5 其实是软的"），你据此改图。
+
+每轮同步更新 `case.json` 里的 `stages`（阶段状态）、`pending`（等用户决定的事）、`running`（后台任务），再 `render`，让 `progress.html` 与对话一致。
 
 ---
 

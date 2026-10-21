@@ -33,16 +33,21 @@ scripts/case_tool.py          # new / check / render / index  (Python 3 stdlib o
 
 ```bash
 python3 scripts/case_tool.py new --slug <short-name> --title "<title>" [--origin retro]
-python3 scripts/case_tool.py render <case-dir>   # validate + write tree.md and graph.canvas
+python3 scripts/case_tool.py render <case-dir>   # validate + write tree.md, graph.canvas and progress.html
+python3 scripts/case_tool.py html   <case-dir>    # write progress.html only
 python3 scripts/case_tool.py check  <case-dir>    # validate only
 python3 scripts/case_tool.py index                # rebuild INDEX.md
 ```
 
 `render` and `check` enforce the method as hard errors (pruning by a soft preference, by an unverified hard constraint, or by an unverified fact) and as rule reminders (unextracted conflict core after repeated failure; parked candidates not re-reviewed once all live candidates are out).
 
+`progress.html` is an offline, single-file progress dashboard (stages, pending decisions, running tasks, the solution tree, claims) that auto-refreshes every 10 seconds.
+
+Optional **claims ledger** (`claims[]`): outward-facing statements (paper claims, investment theses) with frozen wording, coverage, status, and typed dependencies (`conclusion`, `method`, `cites`). The verification level V0–V3 is computed from verification records, never hand-entered. When an upstream claim is withdrawn, `check` flags the downstream claims that depend on its conclusion or method (`规则·连带`) and only asks citing claims to update their reference.
+
 The case library location is chosen by, in order: `--root`, the `PROBLEM_CASES_DIR` environment variable, or the default path baked into the script. Set `PROBLEM_CASES_DIR` to point the tool at your own case library.
 
-Each case is one directory: `case.json` is the single source of truth; `tree.md` and `graph.canvas` (an Obsidian Canvas file) are generated; `INDEX.md` is the library-wide table with per-case sample metrics.
+Each case is one directory: `case.json` is the single source of truth; `tree.md`, `graph.canvas` (an Obsidian Canvas file) and `progress.html` are generated; `INDEX.md` is the library-wide table with per-case sample metrics.
 
 ## Install
 

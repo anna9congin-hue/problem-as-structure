@@ -1,6 +1,6 @@
 # case.json 字段说明
 
-`case.json` 是案例的唯一真源。`tree.md`、`graph.canvas`、`INDEX.md` 都由 `case_tool.py` 生成，不要手改。ID 在整个案例里全局唯一。
+`case.json` 是案例的唯一真源。`tree.md`、`graph.canvas`、`progress.html`、`INDEX.md` 都由 `case_tool.py` 生成，不要手改。ID 在整个案例里全局唯一。
 
 ## 顶层
 
@@ -76,6 +76,43 @@
 
 节点之间树结构以外的关系：`{from, to, type, note}`，`type` 如 `reframed_to`（换了问法）、`depends_on`、`same_as`。
 
+两端都是论断（`claims[]`）时，表示论断之间的依赖：`from` 是下游论断，`to` 是上游论断，`type` 取 `depends_on`，并可加 `edge`：
+
+| `edge` | 含义 | 上游撤回或证伪时 |
+|---|---|---|
+| `conclusion` | 用了上游的结论（缺省值） | 连带：报 `规则·连带`，并沿 conclusion、method 边继续往下传 |
+| `method` | 照搬了上游的方法或推导步骤 | 连带，同上 |
+| `cites` | 只是引用 | 只报 `提醒·改引用`，不往下传 |
+
+上游被取代（superseded）时，所有指向它的边都只报 `提醒·改引用`。论断只能连论断，节点只能连节点。
+
+## `claims[]`（论断台账，可选）
+
+要对外宣称的话（论文里的主张、投资论点）记在这里。节点是"做法"，论断是"说法"，两者不混；论断可以用 `about` 指向节点。没有这个字段的旧案例照常有效。
+
+| 字段 | 含义 |
+|---|---|
+| `id` | `CL1`… |
+| `statement` | 冻结的陈述。改陈述就开一条新论断，用 `supersedes` 指向旧的，旧的状态改为 `superseded` |
+| `about` | 涉及的节点、约束或阶段 ID |
+| `status` | `current` 有效（缺省）、`superseded` 已取代、`withdrawn` 已撤回、`refuted` 已证伪 |
+| `supersedes` | 被本条取代的旧论断 ID |
+| `evidence` | 证据 ID |
+| `coverage` | `{checked, not_covered: [..], weaker_than_claim}`：已核对了什么、明确没覆盖什么、已验证的内容是否弱于论断本身。`not_covered` 只是已知的缺口下限 |
+| `withdrawal` | 撤回时填 `{date, root_cause, scope}`。`scope` 为 `proof`（理由失效，陈述本身未判定）或 `statement`（陈述作废）。状态为有效时不能有这个字段 |
+| `history` | `[{round 或 date, kind, note}]`，`kind` 取 `create`、`fix_reason`（修理由）、`narrow_statement`（收窄陈述）、`clarify_assumption`（写清前提）、`cite_update`（只改引用）、`withdraw` |
+
+**等级由脚本计算，不手填。** 只看 `target` 是该论断、`result=pass` 的验证：
+
+| 等级 | 条件 |
+|---|---|
+| V0 | 没有通过的验证 |
+| V1 | 有通过的验证（核查过） |
+| V2 | 有通过的验证带 `rerun`（可复跑的命令或步骤） |
+| V3 | 有通过的验证带 `independent: true`（检验者独立于提出者，例如用户实测、外部原文） |
+
+`coverage.weaker_than_claim` 为真时降一级（最低 V0）。
+
 ## `conflicts[]`（冲突核）
 
 | 字段 | 含义 |
@@ -120,6 +157,8 @@
 
 ## `verifications[]`（原问题里的验证）
 
+`target` 可以是节点，也可以是论断。验证论断时可加两个可选字段：`rerun`（可复跑的命令或步骤）、`independent`（检验者是否独立于提出者），用来计算论断等级。
+
 | 字段 | 含义 |
 |---|---|
 | `id` | `V1`… |
@@ -141,6 +180,26 @@
 | `actions` | 本轮对结构做了什么，列表 |
 | `questions` | 本轮问了用户什么，列表 |
 | `real_world_attempt` | 现实尝试：`{target, result, note}` 或 `null` |
+
+## 进展面板用的可选字段：`stages[]`、`pending[]`、`running[]`
+
+缺省即可，旧案例照常有效。`render` 与 `html` 用它们生成 `progress.html`；写了就由 `check` 校验。
+
+`stages[]`（阶段图）：
+
+| 字段 | 含义 |
+|---|---|
+| `id` | `S0`、`S1`…，在 stages 内唯一 |
+| `label` | 阶段名 |
+| `status` | `done` 完成、`partial` 部分完成（含草稿）、`active` 进行中、`todo` 未开始、`later` 推迟 |
+| `outputs` | 已有产出，字符串列表，可以写相对路径 |
+| `missing` | 还差什么，字符串 |
+| `depends_on` | 依赖的阶段 ID 列表，不能有环 |
+| `nodes` | 可选，相关的节点 ID |
+
+`pending[]`（等用户决定的事）：`{id, question, about, since_round}`。`id` 如 `P1`；`about` 是相关的节点、约束或阶段 ID 列表（可选）；`since_round` 是从第几轮开始等（整数）。
+
+`running[]`（后台运行中的任务）：`{label, report_path, started}`。`report_path` 是产出报告的路径，`started` 是开始日期。
 
 ## `solution` 与 `retro`
 
