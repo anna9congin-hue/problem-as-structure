@@ -94,6 +94,7 @@
 |---|---|
 | `id` | `CL1`… |
 | `statement` | 冻结的陈述。改陈述就开一条新论断，用 `supersedes` 指向旧的，旧的状态改为 `superseded` |
+| `proposed_by` | 可选，提出者：`ai`（缺省）、`user`，或某个外部 agent 的名字。用来判断检验是否独立 |
 | `about` | 涉及的节点、约束或阶段 ID |
 | `status` | `current` 有效（缺省）、`superseded` 已取代、`withdrawn` 已撤回、`refuted` 已证伪 |
 | `supersedes` | 被本条取代的旧论断 ID |
@@ -109,7 +110,7 @@
 | V0 | 没有通过的验证 |
 | V1 | 有通过的验证（核查过） |
 | V2 | 有通过的验证带 `rerun`（可复跑的命令或步骤） |
-| V3 | 有通过的验证带 `independent: true`（检验者独立于提出者，例如用户实测、外部原文） |
+| V3 | 有通过的验证带 `independent: true`，**并且写明检验者 `by`，`by` 不是论断的提出者**（例如用户实测 `by: user`、另一个 agent 复核）。没写 `by`，或者自己核查自己，都不算独立：`check` 报 `提醒·独立`，等级不升到 V3 |
 
 `coverage.weaker_than_claim` 为真时降一级（最低 V0）。
 
@@ -157,7 +158,7 @@
 
 ## `verifications[]`（原问题里的验证）
 
-`target` 可以是节点，也可以是论断。验证论断时可加两个可选字段：`rerun`（可复跑的命令或步骤）、`independent`（检验者是否独立于提出者），用来计算论断等级。
+`target` 可以是节点，也可以是论断。验证论断时可加三个可选字段，用来计算论断等级：`rerun`（可复跑的命令或步骤，必须能复现判定本身，只能复现其中一部分时不要写）、`independent`（检验者是否独立于提出者）、`by`（检验者：`ai`、`user` 或外部 agent 的名字）。`independent` 只有在 `by` 写明且不同于论断的 `proposed_by` 时才被承认。写 `by: user` 时，要在 `rounds` 里能找到用户实际做了这次检验的记录。
 
 | 字段 | 含义 |
 |---|---|

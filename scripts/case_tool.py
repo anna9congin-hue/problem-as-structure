@@ -578,16 +578,29 @@ def claim_edges(case):
     return out
 
 
+def claim_proposer(cl):
+    """论断的提出者：claims[].proposed_by，缺省为 ai。"""
+    return str(cl.get("proposed_by") or "ai").strip().lower()
+
+
+def independent_ok(cl, v):
+    """independent=true 只有在验证写明检验者（by），且检验者不是论断的提出者时才承认。
+    同一个 agent 自己核查自己，哪怕标了 independent，也不算独立检验。"""
+    by = str(v.get("by") or "").strip().lower()
+    return v.get("independent") is True and bool(by) and by != claim_proposer(cl)
+
+
 def claim_grade(case, cl):
     """等级由验证记录计算，不手填。V0 无通过的验证；V1 有通过；V2 通过且可复跑（rerun）；
-    V3 通过且检验者独立于提出者（independent=true）。coverage.weaker_than_claim 为真时降一级。"""
+    V3 通过且检验者独立于提出者（independent=true，写明 by，且 by 不是提出者）。
+    coverage.weaker_than_claim 为真时降一级。"""
     vs = [v for v in case["verifications"] if v.get("target") == cl.get("id") and v.get("result") == "pass"]
     g = 0
     if vs:
         g = 1
         if any(v.get("rerun") for v in vs):
             g = 2
-        if any(v.get("independent") is True for v in vs):
+        if any(independent_ok(cl, v) for v in vs):
             g = 3
     if (cl.get("coverage") or {}).get("weaker_than_claim") and g > 0:
         g -= 1
@@ -663,6 +676,11 @@ def check_claims(case, N, C, EV, E, W):
         for h in c.get("history", []) or []:
             if h.get("kind") not in CLAIM_KINDS:
                 E(f"论断 {cid} 的 history.kind `{h.get('kind')}` 不在 {sorted(CLAIM_KINDS)}")
+        for v in case["verifications"]:
+            if v.get("target") == cid and v.get("independent") is True and not independent_ok(c, v):
+                why = "没写检验者 by" if not v.get("by") else f"检验者 `{v.get('by')}` 就是提出者"
+                W(f"提醒·独立：验证 {v.get('id')} 标了 independent，但{why}，不计为独立检验（{cid} 不升到 V3）。"
+                  "自己核查自己不算独立；由用户实测、外部原文或另一个 agent 核查时，写明 by")
     rules, notes = claim_alerts(case)
     for f, root, via, e in rules:
         W(f"规则·连带：{f} 经「{EDGE_TYPES[e]}」依赖 {via}；上游 {root} {CLAIM_STATUS[CL[root].get('status')]}。"
@@ -1559,7 +1577,7 @@ dl{margin:0;display:grid;grid-template-columns:max-content 1fr;gap:3px 10px}dt{c
        el('p', { text: '未覆盖：' + txt(cov.not_covered) + (cov.weaker_than_claim ? '（弱于论断，等级已降一级）' : '') }),
        el('p', null, ['上游：'].concat(up.length ? up.map(function (e) { return el('span', null, [cl(e[1]), '（' + D.edge_types[e[2]] + '） ']); }) : ['—'])),
        el('p', null, ['下游：'].concat(dn.length ? dn.map(function (e) { return el('span', null, [cl(e[0]), '（' + D.edge_types[e[2]] + '） ']); }) : ['—'])),
-       el('p', { text: '验证：' + (vs.length ? vs.map(function (v) { return v.id + ' ' + v.result + (v.independent ? '·独立' : '') + (v.rerun ? '·可复跑' : '') + '：' + (v.method || ''); }).join('；') : '—') }),
+       el('p', { text: '验证：' + (vs.length ? vs.map(function (v) { return v.id + ' ' + v.result + (v.independent ? ((v.by && String(v.by).trim().toLowerCase() !== String(c.proposed_by || 'ai').trim().toLowerCase()) ? '·独立（' + v.by + '）' : '·独立（不认：未写检验者或检验者即提出者）') : '') + (v.rerun ? '·可复跑' : '') + '：' + (v.method || ''); }).join('；') : '—') }),
        c.withdrawal ? el('p', { class: 'err', text: '撤回：' + (c.withdrawal.date || '') + ' ' + (c.withdrawal.scope === 'proof' ? '（理由失效，陈述未判定）' : '（陈述作废）') + ' 根因：' + (c.withdrawal.root_cause || '—') }) : null,
        arr(c.history).length ? el('ul', null, arr(c.history).map(function (h) { return el('li', { text: (h.round || h.date || '') + ' ' + h.kind + '：' + (h.note || '') }); })) : null
       ].forEach(function (x) { if (x) info.appendChild(x); });

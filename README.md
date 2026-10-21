@@ -24,6 +24,7 @@ SKILL.md                     # the protocol the agent follows
 references/case_schema.md     # case.json field reference
 references/archetypes.md      # starter library of 12 approximate archetypes
 references/soft_constraints.md  # relative, dynamic soft constraints ("too expensive", "too slow", ...)
+references/delegation.md      # handing tasks to other agents: delivery quality ≈ verifier quality
 scripts/case_tool.py          # new / check / render / index  (Python 3 stdlib only)
 ```
 
