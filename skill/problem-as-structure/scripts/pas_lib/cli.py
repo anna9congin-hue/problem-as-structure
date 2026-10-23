@@ -62,20 +62,30 @@ def _next_id(case, prefix):
 
 
 def _preview(before, after, ops):
+    # 逐步应用：每条操作的前后值都相对它执行时的状态，否则数组下标移动后会显示错的对象。
     out = []
+    cur = before
     for op in ops:
         path = op.get("path", "")
+        nxt = patch.apply(cur, [op])
+        kind = op.get("op")
         if path.endswith("/-"):
-            path = path[:-2] + f"/{len(patch.get(after, path[:-2])) - 1}"
-        try:
-            b = patch.get(before, path)
-        except PasError:
-            b = None
-        try:
-            a = patch.get(after, path)
-        except PasError:
-            a = None
-        out.append({"op": op.get("op"), "path": path, "before": b, "after": a})
+            path = path[:-2] + f"/{len(patch.get(nxt, path[:-2])) - 1}"
+        b = a = None
+        if kind != "add" or not path.split("/")[-1].isdigit():
+            try:
+                b = patch.get(cur, path)
+            except PasError:
+                pass
+        if kind != "remove":
+            try:
+                a = patch.get(nxt, path)
+            except PasError:
+                pass
+        if kind == "test":
+            a = b
+        out.append({"op": kind, "path": path, "before": b, "after": a})
+        cur = nxt
     return out
 
 

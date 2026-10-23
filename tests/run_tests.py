@@ -193,6 +193,17 @@ def commands():
         fail("dry-run 改动了文件或失败")
     if before == mid:
         fail("合法的 apply 没有写入")
+    # dry-run 预览：多条追加和删除时，每条的前后值要对应它自己
+    n_c = len(json.loads(mid)["constraints"])
+    multi = [{"op": "add", "path": "/constraints/-", "value": {"id": "C11", "text": "甲", "kind": "soft", "basis": "value", "verified": True}},
+             {"op": "add", "path": "/constraints/-", "value": {"id": "C12", "text": "乙", "kind": "soft", "basis": "value", "verified": True}},
+             {"op": "remove", "path": f"/constraints/{n_c}"}]
+    code, out, err = pas("apply", case_dir, "-", "--dry-run", stdin=json.dumps(multi))
+    pv = json.loads(out)["preview"] if code == 0 else []
+    want = [(f"/constraints/{n_c}", None, "C11"), (f"/constraints/{n_c + 1}", None, "C12"), (f"/constraints/{n_c}", "C11", None)]
+    got = [(p["path"], (p["before"] or {}).get("id"), (p["after"] or {}).get("id")) for p in pv]
+    if got != want:
+        fail(f"dry-run 预览不对：{got}，应为 {want}")
     # add / set / settle / round
     for args, stdin in (
         (["add", case_dir, "evidence", "-"], json.dumps({"claim": "测试证据", "type": "fact", "source": "测试", "verified": True})),
