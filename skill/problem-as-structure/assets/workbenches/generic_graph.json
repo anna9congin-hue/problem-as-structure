@@ -1,0 +1,26 @@
+{
+  "id": "generic_graph",
+  "version": 1,
+  "label": "通用图（待标准化）",
+  "description": "没有合适的标准结构时使用：只有节点、边、状态。使用时把 workbench.standardize_pending 设为 true；同一种用法在 2 个以上案例出现，就整理成正式的定义文件。",
+  "used_by_archetypes": [],
+  "node_types": {
+    "node": {"label": "节点", "properties": {"label": {"type": "string"}, "role": {"type": "string"}}, "required": ["label"]}
+  },
+  "statuses": {
+    "open": {"label": "待评估", "mark": "[ ]", "live": true},
+    "parked": {"label": "搁置", "mark": "[~]"},
+    "out": {"label": "出局", "mark": "[x]", "out": true},
+    "verified": {"label": "已验证", "mark": "[v]", "live": true},
+    "chosen": {"label": "选定", "mark": "[*]", "live": true}
+  },
+  "transitions": "any",
+  "edge_types": {
+    "rel": {"label": "关系", "attrs": {"label": {"type": "string"}}}
+  },
+  "invariants": [
+    {"id": "GG-01", "rule": "field_present", "params": {"workbench_field": "standardize_pending", "equals": true}, "level": "remind", "message": "用了通用图", "action": "结案时在 retro.unmatched 里写下这种结构的用法，攒到 2 个案例再标准化", "origin": "v2 §7.1"},
+    {"id": "GG-02", "rule": "status_requires", "params": {"status": "chosen", "verification": "pass", "error_only_if_case_status": "solved"}, "level": "error", "message": "已选定，但还没有在原问题里验证通过", "origin": "v1"}
+  ],
+  "render": {"as": "graph", "label_field": "label", "show": ["status", "role"]}
+}

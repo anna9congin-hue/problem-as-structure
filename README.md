@@ -1,64 +1,73 @@
-# problem-as-structure
+# problem-as-structure v2
 
-An [Agent Skill](https://agentskills.io) for solving hard, multi-constraint real-world problems *with* a user, and saving each solve as a reusable, inspectable case: the problem's approximate archetype, the solution-space graph, the full exploration trail (what was tried, pruned, parked, and the conflict cores), the verification done in the original problem, and the final plan.
+一个 Agent Skill：遇到多约束、反复碰壁的复杂现实问题时，先识别问题的数学本质结构（近似母题），调用这个母题的经典方法，建方法要求的工作数据结构，人和 AI 沿方法推进，最后带回原问题验证，并经用户的价值确认。自然语言只用于输入和输出。
 
-一个 Agent Skill：和用户一起求解多约束的复杂现实问题，并把每次求解存成可复用、可检查的案例——问题的近似母题、解空间图、完整探索过程（已尝试、已淘汰、已搁置、冲突核）、在原问题里做的验证，以及最终方案。
+配套论文：《问题即结构，语言即外壳》。
 
-## Idea
-
-Most agent conversations throw away the structure behind a hard problem. You watch an assistant try option after option, hit walls, and sometimes give up — while the answer sat in an option it dropped 200 turns earlier for a weak reason. This skill makes the structure a first-class, persisted object:
-
-1. **Collect constraints first.** Hard constraints and soft preferences are kept separate. A soft preference may only *park* a candidate, never *prune* it. An unverified fact may never prune.
-2. **Pick an approximate archetype** (constraint satisfaction, bootstrapping, bottleneck/shadow-price, inference, search, …) and a good representation. No strict proof is required; correctness is checked by engineering means in the original problem.
-3. **Expand, prune, and park** the solution space as a typed graph.
-4. **On repeated failure, extract the conflict core and backjump** to a higher level instead of trying the next sibling.
-5. **Verify in the original problem** — a real attempt, running code, checking source text, or user confirmation. Reasoning inside the archetype is not verification.
-6. **Save everything** so similar problems can reuse the archetype, the reusable constraint knowledge, and the conflict cores.
-
-The method and its rationale come from the "problem as structure, language as shell" line of work. See `references/`.
-
-## Layout
+## 流水线
 
 ```
-SKILL.md                     # the protocol the agent follows
-references/case_schema.md     # case.json field reference
-references/archetypes.md      # starter library of 12 approximate archetypes
-references/soft_constraints.md  # relative, dynamic soft constraints ("too expensive", "too slow", ...)
-references/delegation.md      # handing tasks to other agents: delivery quality ≈ verifier quality
-scripts/case_tool.py          # new / check / render / index  (Python 3 stdlib only)
+① 拆解输入 → ② 识别结构 → ③ 经典方法 → ④ 工作数据结构 → ⑤ 人机协作
+      ↑                                                        ↓
+⑨ 沉淀 ← ⑧ 价值门 ← ⑦ 诊断（失败按原因回 ①/②/⑤） ← ⑥ 原问题验证
 ```
 
-## The tool
+三个横切机制：X1 人机分工，X2 验证纪律，X3 上下文与委托。每个阶段的目的、操作、关卡见 `skill/problem-as-structure/references/stages.md`。
 
-`case_tool.py` has no third-party dependencies.
+## 目录
 
-```bash
-python3 scripts/case_tool.py new --slug <short-name> --title "<title>" [--origin retro]
-python3 scripts/case_tool.py render <case-dir>   # validate + write tree.md, graph.canvas and progress.html
-python3 scripts/case_tool.py html   <case-dir>    # write progress.html only
-python3 scripts/case_tool.py check  <case-dir>    # validate only
-python3 scripts/case_tool.py index                # rebuild INDEX.md
+```
+skill/problem-as-structure/      # 要安装的 skill（复制这个目录即可）
+  SKILL.md
+  assets/case.v2.schema.json     # 案例公共核心
+  assets/workbench.meta.schema.json
+  assets/workbenches/*.json      # 工作结构定义：candidate_tree、dependency_graph、decision_tree、argument_graph、generic_graph
+  references/                    # 阶段规格、工作结构、pas 手册、schema、16 个母题、投资领域包
+  scripts/pas                    # 唯一写入者（Python 3 标准库，在 3.12 上测试）
+  scripts/case_tool.py           # v1 命令兼容层
+tests/                           # 不需要模型的测试
+  v1_reference/case_tool.py      # 冻结的 v1 工具（差分测试参照）
+  fixtures/                      # 3 个真实案例快照和 v1 输出（MANIFEST.json 记 SHA-256）
+  poison/                        # 37 个坏数据测试
+  run_tests.py
+tools/                           # m0_check、check_skill（--installs 查安装漂移）、replay_itin、freeze_v1
+docs/invariants.md               # 不变量清单
+docs/migration_v1_to_v2.md       # 迁移规则
+evals/                           # 需要模型的评测（尚未运行）
 ```
 
-`render` and `check` enforce the method as hard errors (pruning by a soft preference, by an unverified hard constraint, or by an unverified fact) and as rule reminders (unextracted conflict core after repeated failure; parked candidates not re-reviewed once all live candidates are out).
+## 安装
 
-`progress.html` is an offline, single-file progress dashboard (stages, pending decisions, running tasks, the solution tree, claims) that auto-refreshes every 10 seconds.
+把 `skill/problem-as-structure/` 复制到 agent 的 skills 目录，例如：
 
-Optional **claims ledger** (`claims[]`): outward-facing statements (paper claims, investment theses) with frozen wording, coverage, status, and typed dependencies (`conclusion`, `method`, `cites`). The verification level V0–V3 is computed from verification records, never hand-entered. When an upstream claim is withdrawn, `check` flags the downstream claims that depend on its conclusion or method (`规则·连带`) and only asks citing claims to update their reference.
+```
+rsync -a --delete --exclude=__pycache__ skill/problem-as-structure/ ~/.kiro/skills/problem-as-structure/
+```
 
-The case library location is chosen by, in order: `--root`, the `PROBLEM_CASES_DIR` environment variable, or the default path baked into the script. Set `PROBLEM_CASES_DIR` to point the tool at your own case library.
+v1 的案例用 `scripts/pas migrate <案例目录>` 升级，会留下 `case.v1.json` 备份。
 
-Each case is one directory: `case.json` is the single source of truth; `tree.md`, `graph.canvas` (an Obsidian Canvas file) and `progress.html` are generated; `INDEX.md` is the library-wide table with per-case sample metrics.
+## 测试
 
-## Install
+```
+python3 tools/m0_check.py        # schema、定义文件、夹具
+python3 tests/run_tests.py       # 差分（v1 输出逐字一致）、坏数据、命令、随机写入序列
+python3 tools/check_skill.py     # skill 结构，v1 规则全部有落点
+python3 tools/replay_itin.py     # ITIN 案例用 v2 重走
+```
 
-Copy the `problem-as-structure/` directory into your agent's skills directory:
+公开仓库不含 `tests/fixtures/`（作者的真实案例），差分测试和 ITIN 回放会自动跳过；坏数据测试、命令测试、随机写入序列照常运行。
 
-- Kiro: `~/.kiro/skills/`
-- Codex: `~/.codex/skills/`
-- Gemini CLI / Antigravity: `~/.gemini/config/skills/`
-- Claude Code or any Agent Skills host: that host's skills directory, or point the agent at `SKILL.md` directly.
+## 里程碑
 
-## License
+| 里程碑 | 状态 |
+|---|---|
+| M0 schema、定义文件、不变量、夹具 | 完成 |
+| M1 读、校验、渲染、migrate | 完成（差分测试逐字一致） |
+| M2 写入命令、apply、brief、next、due、search、settle | 完成 |
+| M3 母题算子（16 个）、投资领域包、阶段规格、SKILL.md | 完成 |
+| M4 ITIN 与论文案例回放 | 完成 |
+| M5 同步、发布、评测集 | 同步与发布完成；模型评测已写好，未运行 |
 
-MIT. See `LICENSE`.
+## 许可
+
+MIT，见 `LICENSE`。

@@ -1,0 +1,88 @@
+{
+  "id": "task-itin",
+  "source": "materials/discovery/source-Antigravity-ITIN信用卡-完整对话.md (paper root)",
+  "note": "With-skill vs without-skill comparison. Turns are fed one at a time; the grader checks case.json and the replies after each turn. Not yet run against a model.",
+  "turns": [
+    {
+      "user": "我只有ITIN没有SSN，想办一张信用卡开始建信用记录。之前申请了两家都被拒。帮我想办法。"
+    },
+    {
+      "user": "我不想要担保卡，押金太麻烦。"
+    },
+    {
+      "user": "Capital One 那张卡我查了，官网说需要SSN。"
+    },
+    {
+      "user": "好，就按你说的那条路走。"
+    }
+  ],
+  "assertions": [
+    {
+      "id": "A1",
+      "stage": "①",
+      "check": "case.json problem.goal and problem.success_test are non-empty; success_test is not just '满意/同意'",
+      "auto": "pas check: no CO-02 remind, no CO-03 rule"
+    },
+    {
+      "id": "A2",
+      "stage": "①",
+      "check": "'不想要担保卡' is recorded as a soft constraint (kind=soft or preference), not a hard one",
+      "auto": "jq constraints"
+    },
+    {
+      "id": "A3",
+      "stage": "①",
+      "check": "Issuer requirements (ITIN accepted?) are recorded as evidence with verified=false until checked",
+      "auto": "jq evidence"
+    },
+    {
+      "id": "A4",
+      "stage": "②",
+      "check": "At least one archetype is cold-start (dependency cycle: need credit to get credit), with structural_checks and discriminating_test",
+      "auto": "pas check: no AR-02"
+    },
+    {
+      "id": "A5",
+      "stage": "④",
+      "check": "A dependency_graph workbench marks the cycle and a relay with produces",
+      "auto": "pas check: no DG-01/DG-02 error"
+    },
+    {
+      "id": "A6",
+      "stage": "⑤",
+      "check": "Secured cards are parked (soft preference), not pruned",
+      "auto": "pas check: no CT-03..CT-07 error"
+    },
+    {
+      "id": "A7",
+      "stage": "⑤",
+      "check": "After turn 3, the Capital One node is pruned with conditions citing the verified evidence",
+      "auto": "jq nodes; pas check: no CT-17 remind"
+    },
+    {
+      "id": "A8",
+      "stage": "⑥",
+      "check": "The chosen node has a pass verification with verifier.measures and by",
+      "auto": "pas check: no CO-09/CT-11 error"
+    },
+    {
+      "id": "A9",
+      "stage": "⑧",
+      "check": "The reply before turn 4 states change, cost, alternatives and unverified points; status=solved only after turn 4",
+      "auto": "manual"
+    },
+    {
+      "id": "A10",
+      "stage": "⑨",
+      "check": "retro.lessons has at least one lesson with known_at",
+      "auto": "pas check: no CO-09 remind"
+    },
+    {
+      "id": "A11",
+      "stage": "all",
+      "check": "case.json was written only via pas (no hand edits): pas check exits 0 or 4, never 1",
+      "auto": "exit code"
+    }
+  ],
+  "baseline_expectation": "Without the skill, the model typically lists cards in prose, treats the secured-card preference as a rule, and does not verify issuer requirements. Compare A2, A3, A6, A7."
+}

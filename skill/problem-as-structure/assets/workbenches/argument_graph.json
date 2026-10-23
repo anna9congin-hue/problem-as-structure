@@ -1,0 +1,92 @@
+{
+  "id": "argument_graph",
+  "version": 1,
+  "label": "论证图（论断台账）",
+  "description": "论证与证明、投资论点用的工作结构。节点是要对外宣称的论断，边是论断之间的依赖（结论 / 方法 / 引用）。就是 v1 的 claims[]，等级、连带、撤回规则全部保留；v2 加预测与更新日志。",
+  "used_by_archetypes": ["argument-and-proof"],
+  "node_types": {
+    "claim": {
+      "label": "论断",
+      "properties": {
+        "statement": {"type": "string"},
+        "proposed_by": {"type": "string"},
+        "about": {"type": "array", "items": {"type": "string"}},
+        "supersedes": {"type": "string"},
+        "evidence": {"type": "array", "items": {"type": "string"}},
+        "coverage": {
+          "type": "object",
+          "properties": {
+            "checked": {"type": "string"},
+            "not_covered": {"type": "array", "items": {"type": "string"}},
+            "weaker_than_claim": {"type": "boolean"}
+          }
+        },
+        "withdrawal": {
+          "type": "object", "required": ["scope"],
+          "properties": {"date": {"type": "string"}, "root_cause": {"type": "string"}, "scope": {"enum": ["proof", "statement"]}}
+        },
+        "prediction": {
+          "type": "object", "required": ["statement", "falsifier", "settle_by"],
+          "description": "可结算的论断（B 类验证）：事前写下证伪条件与结算日",
+          "properties": {
+            "statement": {"type": "string"},
+            "falsifier": {"type": "string", "description": "观察到什么就算错"},
+            "settle_by": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
+            "p": {"type": "number", "minimum": 0, "maximum": 1},
+            "made_at": {"type": "string"},
+            "event": {
+              "type": "object", "required": ["date"],
+              "description": "依赖的事件（财报、审批、到账）：事前登记两种结果各自怎么办",
+              "properties": {"date": {"type": "string"}, "label": {"type": "string"}, "if_good": {"type": "string"}, "if_bad": {"type": "string"}}
+            },
+            "outcome": {
+              "type": "object", "required": ["date", "result"],
+              "properties": {"date": {"type": "string"}, "result": {"enum": ["true", "false", "void"]}, "note": {"type": "string"}}
+            }
+          }
+        },
+        "update_log": {
+          "type": "array",
+          "items": {
+            "type": "object", "required": ["effect"],
+            "properties": {
+              "round": {"type": "integer"}, "date": {"type": "string"},
+              "evidence": {"type": "string"},
+              "effect": {"enum": ["strengthen", "weaken", "neutral"]},
+              "action": {"type": "string"}
+            }
+          }
+        },
+        "history": {
+          "type": "array",
+          "items": {
+            "type": "object", "required": ["kind"],
+            "properties": {"round": {"type": "integer"}, "date": {"type": "string"}, "kind": {"enum": ["create", "fix_reason", "narrow_statement", "clarify_assumption", "cite_update", "withdraw"]}, "note": {"type": "string"}}
+          }
+        }
+      },
+      "required": ["statement"]
+    }
+  },
+  "statuses": {
+    "current": {"label": "有效", "live": true},
+    "superseded": {"label": "已取代", "out": true},
+    "withdrawn": {"label": "已撤回", "out": true},
+    "refuted": {"label": "已证伪", "out": true}
+  },
+  "transitions": [["current", "superseded"], ["current", "withdrawn"], ["current", "refuted"]],
+  "edge_types": {
+    "depends_on": {"label": "依赖", "from": ["claim"], "to": ["claim"], "attrs": {"edge": {"enum": ["conclusion", "method", "cites"]}}}
+  },
+  "invariants": [
+    {"id": "AG-01", "rule": "acyclic", "params": {"edge": "depends_on"}, "level": "error", "message": "论断依赖有环", "origin": "v2"},
+    {"id": "AG-02", "rule": "ref_exists", "params": {"field": "evidence", "target": "evidence"}, "level": "error", "message": "论断引用了不存在的证据", "origin": "v1"},
+    {"id": "AG-03", "rule": "ref_exists", "params": {"field": "supersedes", "target": "node"}, "level": "error", "message": "supersedes 指向不存在的论断", "origin": "v1"},
+    {"id": "AG-04", "rule": "hook", "params": {"module": "argument_graph", "function": "withdrawal_consistency"}, "level": "error", "message": "状态有效却带 withdrawal，或已撤回却没写 scope", "origin": "v1", "poison": "P-AG-04"},
+    {"id": "AG-05", "rule": "hook", "params": {"module": "argument_graph", "function": "grade"}, "level": "remind", "message": "等级由验证记录计算（V0–V3）；标了 independent 但没写检验者、或检验者就是提出者时不计为独立", "action": "由用户实测、外部原文或另一个 agent 核查时，写明 by", "origin": "v1 提醒·独立", "poison": "P-AG-05"},
+    {"id": "AG-06", "rule": "hook", "params": {"module": "argument_graph", "function": "cascade"}, "level": "rule", "message": "上游论断撤回或证伪，经结论或方法边依赖它的下游论断要处理", "action": "重审、收窄或降级后再对外使用", "origin": "v1 规则·连带", "poison": "P-AG-06"},
+    {"id": "AG-07", "rule": "hook", "params": {"module": "argument_graph", "function": "cite_update"}, "level": "remind", "message": "引用指向已取代、撤回或证伪的论断", "action": "更新引用即可，不连带", "origin": "v1 提醒·改引用"},
+    {"id": "AG-08", "rule": "hook", "params": {"module": "argument_graph", "function": "due"}, "level": "rule", "message": "预测已过结算日但没有结算结果", "action": "用 pas settle 写下结果（true / false / void）", "origin": "v2 R11 预测账本", "poison": "P-AG-08"}
+  ],
+  "render": {"as": "table", "label_field": "statement", "show": ["status", "grade", "coverage", "prediction"], "legend": "等级由验证记录自动计算：V0 未验证，V1 核查通过，V2 可复跑，V3 独立检验；覆盖弱于论断时降一级"}
+}

@@ -1,0 +1,47 @@
+{
+  "id": "candidate_tree",
+  "version": 1,
+  "label": "候选树",
+  "description": "约束满足、搜索与筛选用的工作结构：目标 → 类别 → 具体候选。就是 v1 的 nodes[]，校验规则全部保留。",
+  "used_by_archetypes": ["constraint-satisfaction", "search-and-screen"],
+  "node_types": {
+    "goal": {"label": "目标", "properties": {"label": {"type": "string"}}, "required": ["label"]},
+    "category": {"label": "类别", "properties": {"label": {"type": "string"}}, "required": ["label"]},
+    "candidate": {"label": "候选", "properties": {"label": {"type": "string"}}, "required": ["label"]},
+    "subgoal": {"label": "子目标", "properties": {"label": {"type": "string"}}, "required": ["label"]},
+    "relax": {"label": "放松约束", "properties": {"label": {"type": "string"}}, "required": ["label"]}
+  },
+  "statuses": {
+    "open": {"label": "待评估", "mark": "[ ]", "live": true},
+    "expanded": {"label": "已展开", "mark": "[>]", "live": true},
+    "pruned": {"label": "淘汰", "mark": "[x]", "out": true, "color": "1"},
+    "parked": {"label": "搁置", "mark": "[~]", "color": "3"},
+    "failed": {"label": "失败", "mark": "[!]", "out": true, "color": "1"},
+    "verified": {"label": "已验证", "mark": "[v]", "live": true, "color": "5"},
+    "chosen": {"label": "选定", "mark": "[*]", "live": true, "color": "4"}
+  },
+  "transitions": "any",
+  "edge_types": {
+    "parent": {"label": "属于"}
+  },
+  "invariants": [
+    {"id": "CT-01", "rule": "tree", "params": {"edge": "parent", "root_kind": "goal"}, "level": "error", "message": "候选树必须恰好有 1 个根，根的 kind 是 goal，且没有环", "origin": "v1 树结构", "poison": "P-CT-01"},
+    {"id": "CT-02", "rule": "ref_exists", "params": {"field": "evidence", "target": "evidence"}, "level": "error", "message": "节点引用了不存在的证据", "origin": "v1", "poison": "P-CT-02"},
+    {"id": "CT-03", "rule": "status_requires", "params": {"status": "pruned", "field_nonempty": "pruned_by"}, "level": "error", "message": "被淘汰但 pruned_by 为空：淘汰必须指向违反的硬约束", "origin": "v1", "poison": "P-CT-03"},
+    {"id": "CT-04", "rule": "ref_filter", "params": {"status": "pruned", "field": "pruned_by", "target": "constraint", "must": {"kind": "hard"}}, "level": "error", "message": "被软偏好淘汰：软偏好只能搁置，不能淘汰", "origin": "v1 软偏好只能搁置", "poison": "P-CT-04"},
+    {"id": "CT-05", "rule": "ref_filter", "params": {"status": "pruned", "field": "pruned_by", "target": "constraint", "must": {"verified": true}}, "level": "error", "message": "被未确认的硬约束淘汰：先请用户确认，或改为搁置", "origin": "v1", "poison": "P-CT-05"},
+    {"id": "CT-06", "rule": "ref_filter", "params": {"status": "pruned", "field": "pruned_by", "target": "constraint", "must": {"world_fact_backed": true}, "only_if": {"basis": "world_fact"}}, "level": "error", "message": "被外部世界事实淘汰，但该约束没有已核实的证据：用户说了不等于事实成立", "origin": "v1 未核实不得淘汰", "poison": "P-CT-06"},
+    {"id": "CT-07", "rule": "evidence_verified", "params": {"status": "pruned", "field": "evidence"}, "level": "error", "message": "淘汰用了未核实的事实：未核实的事实不得用于淘汰，改为搁置", "origin": "v1", "poison": "P-CT-07"},
+    {"id": "CT-08", "rule": "status_requires", "params": {"status": "parked", "any_nonempty": ["parked_by", "note"]}, "level": "error", "message": "被搁置但没写原因（parked_by 或 note）", "origin": "v1", "poison": "P-CT-08"},
+    {"id": "CT-09", "rule": "status_requires", "params": {"status": "failed", "verification": "fail", "or_field": "note"}, "level": "error", "message": "标为失败，但没有 result=fail 的验证记录，也没有 note", "origin": "v1"},
+    {"id": "CT-10", "rule": "status_requires", "params": {"status": "verified", "verification": "pass"}, "level": "error", "message": "标为已验证，但没有 result=pass 的验证记录", "origin": "v1"},
+    {"id": "CT-11", "rule": "status_requires", "params": {"status": "chosen", "verification": "pass", "error_only_if_case_status": "solved"}, "level": "error", "message": "已选定，但还没有在原问题里验证通过（result=pass）", "origin": "v1 选定需验证", "poison": "P-CT-11"},
+    {"id": "CT-12", "rule": "field_present", "params": {"statuses": ["pruned", "failed", "parked"], "field": "conditions"}, "level": "remind", "message": "出局或搁置没写 conditions（在什么前提下成立）", "action": "补 conditions，方便以后体制或前提变化时重审", "origin": "v2 R14"},
+    {"id": "CT-13", "rule": "hook", "params": {"module": "candidate_tree", "function": "park_reference"}, "level": "rule", "message": "软偏好参照检验：参照对象失效，或被搁置者已是可行集合里该维度最好的", "action": "重新摆出该候选，说明代价是约束的价格，并列出可放松的约束", "origin": "v1 规则·参照失效 / 规则·可行集最优"},
+    {"id": "CT-14", "rule": "hook", "params": {"module": "candidate_tree", "function": "sibling_contrast"}, "level": "rule", "message": "选定时同层没有经过评估的对照候选", "action": "至少再展开并评估一个替代做法", "origin": "v1 规则·对照"},
+    {"id": "CT-15", "rule": "hook", "params": {"module": "candidate_tree", "function": "jump_back"}, "level": "rule", "message": "同层已有 2 个以上失败还没提取共同原因", "action": "写一条 conflict，跳到上一层，不要再试同层的下一个", "origin": "v1 规则·跳级回溯", "poison": "P-CT-15"},
+    {"id": "CT-16", "rule": "hook", "params": {"module": "candidate_tree", "function": "reexamine_parked"}, "level": "rule", "message": "所有可行候选都已出局，但仍有搁置项", "action": "逐个重审搁置项；再检查类别层是否漏了；再提出可放松的约束", "origin": "v1 规则·重审搁置", "poison": "P-CT-16"},
+    {"id": "CT-17", "rule": "hook", "params": {"module": "candidate_tree", "function": "prune_without_fact"}, "level": "remind", "message": "被淘汰但没附事实依据", "action": "附上查到的条款或实测结果作为 evidence", "origin": "v1 提醒"}
+  ],
+  "render": {"as": "tree", "label_field": "label", "show": ["status", "note"], "legend": "[*] 选定　[v] 已验证　[>] 已展开　[ ] 待评估　[~] 搁置（软偏好或依据未核实，可重审）　[x] 淘汰（违反已确认的硬约束）　[!] 失败（现实尝试或验证失败）"}
+}

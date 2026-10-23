@@ -1,0 +1,111 @@
+{
+  "schema_version": 2,
+  "id": "2026-10-14_itin-mini",
+  "title": "用 ITIN 办信用卡（v2 干净样本）",
+  "status": "converging",
+  "origin": "retro",
+  "source": {"path": "tests/poison/base_clean.v2.json", "note": "由 ITIN 案例缩写而成，用作所有坏数据测试的干净双生样本"},
+  "created": "2026-10-14",
+  "updated": "2026-10-22",
+  "agent": "Kiro",
+  "domain": ["个人金融"],
+  "problem": {
+    "user_words": "我只有 ITIN，想办一张能在美国用、能积累信用的信用卡",
+    "goal": "拿到一张能在美国使用、并能积累信用的信用卡",
+    "query_type": "feasible",
+    "initial_state": ["只有 ITIN，没有 SSN", "零信用记录"],
+    "success_test": "信用局出现该账户的按时还款记录"
+  },
+  "constraints": [
+    {"id": "C1", "text": "不能用需要往旧地址邮寄实体卡的方案", "kind": "hard", "basis": "own_fact", "verified": true},
+    {"id": "C2", "text": "只有 ITIN，没有 SSN", "kind": "hard", "basis": "own_fact", "verified": true},
+    {"id": "C3", "text": "不做英文电话核身", "kind": "hard", "basis": "value", "verified": true},
+    {"id": "C4", "text": "月费尽量低", "kind": "soft", "basis": "value", "verified": true},
+    {"id": "C5", "text": "某银行不收 ITIN", "kind": "hard", "basis": "world_fact", "verified": true, "evidence": ["E2"]}
+  ],
+  "archetypes": [
+    {
+      "id": "A1", "name": "冷启动与自举", "ref": "cold-start", "status": "accepted",
+      "role": "决定先做什么：先建立信用记录",
+      "mapping": "要信用记录才能办卡，要卡才能有信用记录；中继 = 不要求信用记录、又上报信用局的产品",
+      "surface_cues": ["没有记录拿不到资格"],
+      "structural_checks": ["存在 信用卡 ⇄ 信用记录 的依赖环"],
+      "discriminating_test": {"test": "画出依赖关系看是否真有环", "result": "有环", "versus": ["A2"]},
+      "adversary": {"tried": "找一条不经过信用记录就能办卡的路径", "found": false},
+      "workbench": "dependency_graph"
+    },
+    {
+      "id": "A2", "name": "约束满足与可达性", "ref": "constraint-satisfaction", "status": "accepted",
+      "role": "决定在哪一类里选：按申请前提分组",
+      "structural_checks": ["约束能列清楚", "候选能列举"],
+      "discriminating_test": {"test": "是否每个候选都能逐条对照约束", "result": "能"},
+      "workbench": "candidate_tree"
+    },
+    {"id": "A3", "name": "论证与证明", "ref": "argument-and-proof", "status": "accepted", "role": "记录对外结论与预测", "structural_checks": ["结论能写成可检验的话"], "discriminating_test": {"test": "结论是否有可观测的证伪条件", "result": "有"}, "workbench": "argument_graph"}
+  ],
+  "workbenches": [
+    {
+      "id": "W1", "type": "candidate_tree", "type_version": 1, "label": "办卡路径", "archetypes": ["A2"],
+      "nodes": [
+        {"id": "N0", "kind": "goal", "status": "expanded", "parent": null, "label": "拿到能积累信用的信用卡", "round": 1, "proposed_by": "user"},
+        {"id": "N1", "kind": "category", "status": "failed", "parent": "N0", "label": "直接申请信用卡", "round": 2, "note": "两次实际申请都失败", "conditions": ["零信用记录", "只有 ITIN"]},
+        {"id": "N11", "kind": "candidate", "status": "failed", "parent": "N1", "label": "Amex 预审", "round": 3},
+        {"id": "N12", "kind": "candidate", "status": "failed", "parent": "N1", "label": "某信用社", "round": 4},
+        {"id": "N2", "kind": "subgoal", "status": "expanded", "parent": "N0", "label": "先建立信用记录", "round": 5},
+        {"id": "N21", "kind": "candidate", "status": "chosen", "parent": "N2", "label": "Kikoff Credit Account", "round": 6, "decided_at": "2026-10-14", "attrs": {"cost_month": 5}, "evidence": ["E1"], "history": [{"round": 7, "status": "parked", "note": "月费"}, {"round": 9, "status": "chosen", "note": "可行集里最便宜"}]},
+        {"id": "N22", "kind": "candidate", "status": "parked", "parent": "N2", "label": "Self Credit Builder", "round": 6, "parked_by": ["C4"], "park_reference": {"measure": "cost_month", "direction": "lower", "compared_to": ["N21"]}, "attrs": {"cost_month": 25}, "conditions": ["月费按当前定价"]},
+        {"id": "N23", "kind": "candidate", "status": "pruned", "parent": "N2", "label": "某银行担保卡", "round": 6, "pruned_by": ["C5"], "evidence": ["E2"], "decided_at": "2026-10-14", "conditions": ["该行政策不收 ITIN（2026-10）"]}
+      ]
+    },
+    {
+      "id": "W2", "type": "dependency_graph", "type_version": 1, "label": "信用冷启动", "archetypes": ["A1"],
+      "nodes": [
+        {"id": "G1", "kind": "item", "status": "blocked", "label": "信用卡"},
+        {"id": "G2", "kind": "item", "status": "blocked", "label": "信用记录"},
+        {"id": "G3", "kind": "relay", "status": "chosen", "label": "信用构建账户", "produces": "G2"}
+      ],
+      "edges": [
+        {"from": "G1", "to": "G2", "type": "requires"},
+        {"from": "G2", "to": "G1", "type": "requires"},
+        {"from": "G3", "to": "G2", "type": "produces"}
+      ],
+      "extra": {"cycles": [["G1", "G2"]]}
+    },
+    {
+      "id": "W3", "type": "argument_graph", "type_version": 1, "label": "结论", "archetypes": ["A3"],
+      "nodes": [
+        {"id": "CL1", "kind": "claim", "status": "current", "statement": "Kikoff 账户会在 2 个账单周期内出现在信用报告上", "proposed_by": "ai",
+         "evidence": ["E1"],
+         "prediction": {"statement": "信用报告出现 Kikoff 账户", "falsifier": "两个账单周期后仍未出现", "settle_by": "2099-12-31", "p": 0.8, "made_at": "2026-10-14",
+                        "event": {"date": "2026-11-12", "label": "第一次账单到期", "if_good": "保持自动还款", "if_bad": "联系客服并评估 Firstcard Build"}},
+         "update_log": [{"round": 9, "evidence": "E1", "effect": "strengthen", "action": "无"}]}
+      ],
+      "edges": []
+    }
+  ],
+  "links": [
+    {"from": "G3", "to": "N2", "type": "same_as", "note": "依赖图里的中继，就是候选树里的子目标"}
+  ],
+  "evidence": [
+    {"id": "E1", "claim": "Kikoff 人工审核通过", "type": "test", "source": "用户实测", "verified": true, "date": "2026-10-14", "observed_at": "2026-10-14"},
+    {"id": "E2", "claim": "某银行官网写明不接受 ITIN", "type": "fact", "source": "官网条款原文", "verified": true, "date": "2026-10-13", "observed_at": "2026-10-13"}
+  ],
+  "verifications": [
+    {"id": "V1", "target": "N11", "method": "实际申请 Amex 预审", "result": "fail", "date": "2026-10-13", "by": "user", "verifier": {"class": "A", "measures": "能否获批", "fp_risk": "low"}, "cause": "implementation", "note": "发卡方要求信用记录"},
+    {"id": "V2", "target": "N12", "method": "官网查看入会条件", "result": "fail", "date": "2026-10-13", "by": "user", "verifier": {"class": "A", "measures": "能否入会", "fp_risk": "low"}, "cause": "missing_constraint", "violated": ["C2"]},
+    {"id": "V3", "target": ["N21", "G3"], "method": "客服人工审核（护照 + ITIN + 账单）", "result": "pass", "date": "2026-10-14", "by": "user", "verifier": {"class": "A", "measures": "账户能否开通", "fp_risk": "low"}, "evidence": ["E1"]},
+    {"id": "V4", "target": "CL1", "method": "查看信用报告", "result": "pending", "verifier": {"class": "B", "measures": "信用局是否出现账户", "fp_risk": "low"}}
+  ],
+  "conflicts": [
+    {"id": "K1", "failed": ["N11", "N12"], "common_cause": "零信用记录：直接申请类产品都要求已有信用记录", "jump_to": "N2", "conditions": ["无 SSN", "无美国信用史"], "round": 5}
+  ],
+  "disagreements": [],
+  "rounds": [
+    {"n": 1, "date": "2026-10-13", "user": "我只有 ITIN，想办信用卡", "correction": false, "stages": [1], "actions": ["拆解输入，记 C1–C4"], "questions": [], "real_world_attempt": null},
+    {"n": 5, "date": "2026-10-14", "stages": [7, 2, 4], "actions": ["两次失败提冲突核 K1，跳到子目标 N2", "识别冷启动，建依赖图 W2"], "real_world_attempt": null},
+    {"n": 9, "date": "2026-10-14", "stages": [6, 8], "actions": ["Kikoff 人工审核通过（V3），用户接受"], "real_world_attempt": {"target": "N21", "result": "pass", "note": "人工审核"}}
+  ],
+  "pending": [{"id": "P1", "question": "两个账单周期后查看信用报告", "about": ["CL1"], "since_round": 9}],
+  "solution": {"chosen": ["N21"], "alternatives": ["N22"], "summary": "Kikoff Credit Account；结算见 CL1 的预测"},
+  "retro": {"lessons": [{"text": "直接办卡两次失败的共同原因是零信用记录；先找环外中继。", "round": 5, "known_at": "2026-10-14"}], "reusable_constraints": ["押金卡多数要求邮寄实体卡"], "archetype_fit": "冷启动 + 约束满足组合合适", "unmatched": []}
+}

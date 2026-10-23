@@ -1,0 +1,39 @@
+{
+  "id": "dependency_graph",
+  "version": 1,
+  "label": "依赖图",
+  "description": "冷启动与自举、规划与调度用的工作结构。节点是要拿到的东西，requires 边表示'要先有'。冷启动的关键是：环必须标出，中继不能依赖环里的任何东西。",
+  "used_by_archetypes": ["cold-start", "planning"],
+  "node_types": {
+    "item": {"label": "要拿到的东西", "properties": {"label": {"type": "string"}}, "required": ["label"]},
+    "relay": {"label": "中继（环外入口）", "properties": {"label": {"type": "string"}, "produces": {"type": "string", "description": "它能产出环里的哪个东西"}}, "required": ["label", "produces"]},
+    "action": {"label": "动作", "properties": {"label": {"type": "string"}}, "required": ["label"]}
+  },
+  "statuses": {
+    "open": {"label": "待评估", "mark": "[ ]", "live": true},
+    "blocked": {"label": "受阻", "mark": "[#]"},
+    "available": {"label": "可得", "mark": "[+]", "live": true},
+    "failed": {"label": "失败", "mark": "[!]", "out": true, "color": "1"},
+    "verified": {"label": "已验证", "mark": "[v]", "live": true, "color": "5"},
+    "chosen": {"label": "选定", "mark": "[*]", "live": true, "color": "4"}
+  },
+  "transitions": "any",
+  "edge_types": {
+    "requires": {"label": "要先有"},
+    "produces": {"label": "产出", "from": ["relay", "action"]}
+  },
+  "extra": {
+    "type": "object",
+    "properties": {
+      "cycles": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}, "description": "已标出的依赖环，每个环是节点 ID 列表"}
+    }
+  },
+  "invariants": [
+    {"id": "DG-01", "rule": "cycles_marked", "params": {"edge": "requires", "marks": "cycles"}, "level": "error", "message": "requires 边里有环没在 extra.cycles 里标出：冷启动问题必须先把环画出来", "origin": "v2 冷启动母题", "poison": "P-DG-01"},
+    {"id": "DG-02", "rule": "not_reaches", "params": {"from_kind": "relay", "edge": "requires", "forbidden": "marked_cycles"}, "level": "error", "message": "中继依赖了环里的东西：它不是环外入口", "origin": "v2 冷启动母题陷阱", "poison": "P-DG-02"},
+    {"id": "DG-03", "rule": "status_requires", "params": {"status": "chosen", "verification": "pass", "error_only_if_case_status": "solved"}, "level": "error", "message": "中继或动作已选定，但还没有在原问题里验证它真能产出所需的东西", "origin": "v1 选定需验证"},
+    {"id": "DG-04", "rule": "status_requires", "params": {"status": "failed", "verification": "fail", "or_field": "note"}, "level": "error", "message": "标为失败，但没有 result=fail 的验证记录，也没有 note", "origin": "v1"},
+    {"id": "DG-05", "rule": "ref_exists", "params": {"field": "evidence", "target": "evidence"}, "level": "error", "message": "节点引用了不存在的证据", "origin": "v1"}
+  ],
+  "render": {"as": "graph", "label_field": "label", "show": ["status", "produces"], "legend": "[*] 选定　[v] 已验证　[+] 可得　[ ] 待评估　[#] 受阻　[!] 失败；↻ 标出的环"}
+}

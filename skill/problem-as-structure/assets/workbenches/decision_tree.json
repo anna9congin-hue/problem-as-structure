@@ -1,0 +1,214 @@
+{
+  "id": "decision_tree",
+  "version": 1,
+  "label": "决策树",
+  "description": "不确定下的决策用的工作结构：选择 → 情景 → 结果。每个情景要有概率，说不清的明确标为未知；每个选择标明是否可逆。 树结构用节点的 parent 字段表示。",
+  "used_by_archetypes": [
+    "decision-under-uncertainty"
+  ],
+  "node_types": {
+    "choice": {
+      "label": "选择",
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "reversible": {
+          "type": "boolean"
+        },
+        "cost": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "label"
+      ]
+    },
+    "scenario": {
+      "label": "情景",
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "p": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "p_unknown": {
+          "type": "boolean"
+        },
+        "p_source": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "label"
+      ]
+    },
+    "outcome": {
+      "label": "结果",
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        },
+        "tail_risk": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "label"
+      ]
+    },
+    "probe": {
+      "label": "先获取信息（小试）",
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "cost": {
+          "type": "string"
+        },
+        "resolves": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "label"
+      ]
+    }
+  },
+  "statuses": {
+    "open": {
+      "label": "待评估",
+      "mark": "[ ]",
+      "live": true
+    },
+    "expanded": {
+      "label": "已展开",
+      "mark": "[>]",
+      "live": true
+    },
+    "parked": {
+      "label": "搁置",
+      "mark": "[~]",
+      "color": "3"
+    },
+    "pruned": {
+      "label": "淘汰",
+      "mark": "[x]",
+      "out": true,
+      "color": "1"
+    },
+    "verified": {
+      "label": "已验证",
+      "mark": "[v]",
+      "live": true,
+      "color": "5"
+    },
+    "chosen": {
+      "label": "选定",
+      "mark": "[*]",
+      "live": true,
+      "color": "4"
+    }
+  },
+  "transitions": "any",
+  "edge_types": {
+    "informs": {
+      "label": "小试能回答哪个情景",
+      "from": [
+        "probe"
+      ],
+      "to": [
+        "scenario"
+      ]
+    }
+  },
+  "invariants": [
+    {
+      "id": "DT-01",
+      "rule": "tree",
+      "params": {
+        "edge": "parent",
+        "root_kind": "choice"
+      },
+      "level": "error",
+      "message": "决策树必须恰好有 1 个根，根的 kind 是 choice，且没有环",
+      "origin": "v2 决策母题"
+    },
+    {
+      "id": "DT-02",
+      "rule": "children_prob",
+      "params": {
+        "parent_kind": "choice",
+        "child_kind": "scenario",
+        "field": "p",
+        "unknown_flag": "p_unknown"
+      },
+      "level": "error",
+      "message": "情景要么写概率 p，要么标 p_unknown；同一选择下已知概率之和不能超过 1",
+      "origin": "v2 决策母题",
+      "poison": "P-DT-02"
+    },
+    {
+      "id": "DT-03",
+      "rule": "field_present",
+      "params": {
+        "kinds": [
+          "choice"
+        ],
+        "field": "reversible"
+      },
+      "level": "remind",
+      "message": "选择没标是否可逆",
+      "action": "标 reversible：可逆的先做，不可逆的慢做",
+      "origin": "v2 决策母题"
+    },
+    {
+      "id": "DT-04",
+      "rule": "ref_filter",
+      "params": {
+        "status": "pruned",
+        "field": "pruned_by",
+        "target": "constraint",
+        "must": {
+          "kind": "hard",
+          "verified": true
+        }
+      },
+      "level": "error",
+      "message": "选择被淘汰，但依据不是已确认的硬约束；软偏好只能搁置",
+      "origin": "v1 软偏好只能搁置"
+    },
+    {
+      "id": "DT-05",
+      "rule": "status_requires",
+      "params": {
+        "status": "chosen",
+        "verification": "pass",
+        "error_only_if_case_status": "solved"
+      },
+      "level": "error",
+      "message": "已选定，但还没有在原问题里验证通过",
+      "origin": "v1"
+    }
+  ],
+  "render": {
+    "as": "tree",
+    "label_field": "label",
+    "show": [
+      "status",
+      "p",
+      "reversible",
+      "value"
+    ],
+    "legend": "选择 → 情景（p）→ 结果；[?] 概率未知"
+  }
+}

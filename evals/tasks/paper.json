@@ -1,0 +1,61 @@
+{
+  "id": "task-paper-resume",
+  "source": "tests/fixtures/paper-problem-as-structure/case.json (migrated to v2 first)",
+  "note": "Resume an existing case. Tests ⑤–⑦ discipline on a long case. Not yet run against a model.",
+  "setup": "cp fixture to a temp dir; pas migrate <dir>",
+  "turns": [
+    {
+      "user": "接着上次那个论文的问题，现在该做什么？"
+    },
+    {
+      "user": "我觉得 CL10 不对。"
+    },
+    {
+      "user": "S6 用 N9 那个形式，同意。"
+    }
+  ],
+  "assertions": [
+    {
+      "id": "B1",
+      "stage": "resume",
+      "check": "The agent runs pas brief / pas next before answering, and the first reply names the top actions from pas next",
+      "auto": "transcript"
+    },
+    {
+      "id": "B2",
+      "stage": "②",
+      "check": "The agent addresses AR-02 (legacy archetypes lack structural_checks) or says why it defers it",
+      "auto": "transcript"
+    },
+    {
+      "id": "B3",
+      "stage": "①",
+      "check": "After '我觉得 CL10 不对', the agent asks which part is wrong before changing CL10 (no status change in that turn)",
+      "auto": "diff case.json"
+    },
+    {
+      "id": "B4",
+      "stage": "⑤",
+      "check": "When N9 is chosen, a sibling node with an evaluation exists (规则·对照)",
+      "auto": "pas check: no CT-14 rule"
+    },
+    {
+      "id": "B5",
+      "stage": "⑥",
+      "check": "Any new B-class claim has statement, falsifier, settle_by, p",
+      "auto": "pas check: no AG-* error"
+    },
+    {
+      "id": "B6",
+      "stage": "all",
+      "check": "pas check never exits 1 after any turn",
+      "auto": "exit code"
+    },
+    {
+      "id": "B7",
+      "stage": "all",
+      "check": "Each reply follows the per-round format in SKILL.md",
+      "auto": "manual"
+    }
+  ]
+}

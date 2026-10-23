@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/anna9congin-hue/problem-as-structure/assets/workbench.meta.schema.json",
+  "title": "工作结构定义文件的格式",
+  "description": "每种工作结构一个定义文件：assets/workbenches/<id>.json。pas 的通用图引擎读取定义，按 node_types / edge_types 校验字段，按 statuses / transitions 校验状态，按 invariants 执行声明式规则；声明式规则表达不了的，用 rule=hook 调用 scripts/checks/<module>.py。新增一种结构 = 新增一个定义文件 + 至少一个坏数据测试和一个干净样本。",
+  "type": "object",
+  "required": ["id", "version", "label", "node_types", "statuses", "edge_types", "invariants", "render"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+    "version": {"type": "integer", "minimum": 1},
+    "label": {"type": "string"},
+    "description": {"type": "string"},
+    "used_by_archetypes": {"type": "array", "items": {"type": "string"}},
+    "node_types": {
+      "type": "object",
+      "description": "节点 kind → 字段的 JSON Schema（properties、required）",
+      "additionalProperties": {
+        "type": "object", "required": ["label", "properties"], "additionalProperties": false,
+        "properties": {
+          "label": {"type": "string"},
+          "properties": {"type": "object"},
+          "required": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
+    "statuses": {
+      "type": "object",
+      "description": "状态 → 显示与语义。live=是否算活的候选；out=是否算出局",
+      "additionalProperties": {
+        "type": "object", "required": ["label"], "additionalProperties": false,
+        "properties": {
+          "label": {"type": "string"}, "mark": {"type": "string"},
+          "live": {"type": "boolean"}, "out": {"type": "boolean"}, "color": {"type": "string"}
+        }
+      }
+    },
+    "transitions": {
+      "description": "允许的状态转移 [from, to]；\"any\" 表示不限",
+      "oneOf": [{"const": "any"}, {"type": "array", "items": {"type": "array", "items": {"type": "string"}}}]
+    },
+    "edge_types": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object", "required": ["label"], "additionalProperties": false,
+        "properties": {
+          "label": {"type": "string"},
+          "from": {"type": "array", "items": {"type": "string"}, "description": "允许的起点 kind；缺省不限"},
+          "to": {"type": "array", "items": {"type": "string"}},
+          "attrs": {"type": "object"}
+        }
+      }
+    },
+    "extra": {"type": "object", "description": "结构级字段的 JSON Schema（写在 workbench.extra 里），例如依赖图的 cycles"},
+    "invariants": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "rule", "level", "message"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {"type": "string"},
+          "rule": {"enum": ["tree", "acyclic", "cycles_marked", "not_reaches", "status_requires", "ref_exists", "ref_filter", "evidence_verified", "children_prob", "field_present", "hook"]},
+          "params": {"type": "object"},
+          "level": {"enum": ["error", "rule", "remind"], "description": "error=拒绝写入；rule=方法规则，下一步必须照做；remind=提醒"},
+          "message": {"type": "string"},
+          "action": {"type": "string", "description": "level 为 rule 或 remind 时必填：下一步该做什么（告警必须对应动作）"},
+          "origin": {"type": "string", "description": "v1 规则名或 v2 需求编号"},
+          "poison": {"type": "string", "description": "对应的坏数据测试 id"}
+        }
+      }
+    },
+    "render": {
+      "type": "object", "required": ["as"], "additionalProperties": false,
+      "properties": {
+        "as": {"enum": ["tree", "graph", "table"]},
+        "label_field": {"type": "string"},
+        "show": {"type": "array", "items": {"type": "string"}},
+        "legend": {"type": "string"}
+      }
+    }
+  }
+}

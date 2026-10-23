@@ -1,0 +1,1096 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/anna9congin-hue/problem-as-structure/assets/case.v2.schema.json",
+  "title": "problem-as-structure case v2（公共核心）",
+  "description": "案例的公共核心。工作结构（workbenches[]）的内容由 assets/workbenches/<type>.json 定义，这里只约束外壳。只使用 pas 内置校验器支持的 JSON Schema 子集：type、required、properties、additionalProperties、enum、const、items、$ref、$defs、pattern、minLength、minimum、maximum、oneOf。",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "id",
+    "title",
+    "status",
+    "origin",
+    "created",
+    "updated",
+    "problem",
+    "constraints",
+    "archetypes",
+    "workbenches",
+    "evidence",
+    "verifications",
+    "conflicts",
+    "rounds",
+    "solution"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 2
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}_[a-z0-9][a-z0-9-]*$"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "enum": [
+        "open",
+        "converging",
+        "solved",
+        "parked",
+        "abandoned"
+      ]
+    },
+    "origin": {
+      "enum": [
+        "live",
+        "retro"
+      ]
+    },
+    "source": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "created": {
+      "$ref": "#/$defs/date"
+    },
+    "updated": {
+      "$ref": "#/$defs/date"
+    },
+    "agent": {
+      "type": "string"
+    },
+    "domain": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "problem": {
+      "$ref": "#/$defs/problem"
+    },
+    "constraints": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/constraint"
+      }
+    },
+    "archetypes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/archetype"
+      }
+    },
+    "workbenches": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/workbench"
+      }
+    },
+    "links": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/link"
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/evidence"
+      }
+    },
+    "verifications": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/verification"
+      }
+    },
+    "conflicts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/conflict"
+      }
+    },
+    "disagreements": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/disagreement"
+      }
+    },
+    "rounds": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/round"
+      }
+    },
+    "stages": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/stage"
+      }
+    },
+    "pending": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/pending"
+      }
+    },
+    "running": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/running"
+      }
+    },
+    "solution": {
+      "$ref": "#/$defs/solution"
+    },
+    "retro": {
+      "$ref": "#/$defs/retro"
+    },
+    "migration": {
+      "type": "object",
+      "required": [
+        "from",
+        "date"
+      ],
+      "additionalProperties": false,
+      "description": "由 pas migrate 写入：从哪个版本、哪天迁移。迁移日之前的验证属于 v1 遗留，VF-01 对它们只提醒",
+      "properties": {
+        "from": {
+          "const": 1
+        },
+        "date": {
+          "$ref": "#/$defs/date"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "date": {
+      "type": "string",
+      "pattern": "^(\\d{4}-\\d{2}-\\d{2})?$"
+    },
+    "datetime_or_date": {
+      "type": "string",
+      "pattern": "^(\\d{4}-\\d{2}-\\d{2}(T\\d{2}:\\d{2}(:\\d{2})?)?)?$"
+    },
+    "id_list": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "problem": {
+      "type": "object",
+      "required": [
+        "user_words",
+        "goal",
+        "query_type",
+        "success_test"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "user_words": {
+          "type": "string"
+        },
+        "goal": {
+          "type": "string"
+        },
+        "query_type": {
+          "enum": [
+            "feasible",
+            "optimal",
+            "posterior",
+            "cause",
+            "policy",
+            "proof"
+          ]
+        },
+        "initial_state": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "success_test": {
+          "type": "string"
+        },
+        "fast_path": {
+          "description": "走快速通道（①→⑥→⑧）时填写；reason 必填",
+          "type": "object",
+          "required": [
+            "reason"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            },
+            "round": {
+              "type": "integer"
+            }
+          }
+        }
+      }
+    },
+    "constraint": {
+      "type": "object",
+      "required": [
+        "id",
+        "text",
+        "kind"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^C\\d+$"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "enum": [
+            "hard",
+            "soft"
+          ]
+        },
+        "basis": {
+          "enum": [
+            "value",
+            "own_fact",
+            "world_fact"
+          ]
+        },
+        "evidence": {
+          "$ref": "#/$defs/id_list"
+        },
+        "source": {
+          "type": "string"
+        },
+        "quote": {
+          "type": "string"
+        },
+        "verified": {
+          "type": "boolean"
+        },
+        "round": {
+          "type": "integer"
+        }
+      }
+    },
+    "archetype": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "status"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^A\\d+$"
+        },
+        "name": {
+          "type": "string"
+        },
+        "ref": {
+          "type": "string",
+          "description": "母题算子 id，对应 references/archetypes/<ref>.md"
+        },
+        "status": {
+          "enum": [
+            "candidate",
+            "accepted",
+            "rejected"
+          ]
+        },
+        "role": {
+          "type": "string",
+          "description": "多个母题组合时，这个母题负责问题的哪一部分"
+        },
+        "mapping": {
+          "type": "string"
+        },
+        "representation": {
+          "type": "string"
+        },
+        "method": {
+          "type": "string"
+        },
+        "assumptions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "failure_signals": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "surface_cues": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "structural_checks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "discriminating_test": {
+          "type": "object",
+          "required": [
+            "test"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "test": {
+              "type": "string"
+            },
+            "result": {
+              "type": "string"
+            },
+            "versus": {
+              "$ref": "#/$defs/id_list"
+            }
+          }
+        },
+        "adversary": {
+          "description": "对手先行：选定之前找让这个母题不成立的反例",
+          "type": "object",
+          "required": [
+            "tried"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "tried": {
+              "type": "string"
+            },
+            "counterexample": {
+              "type": "string"
+            },
+            "found": {
+              "type": "boolean"
+            }
+          }
+        },
+        "workbench": {
+          "type": "string",
+          "description": "工作结构定义的 id，例如 candidate_tree"
+        },
+        "note": {
+          "type": "string"
+        },
+        "round": {
+          "type": "integer"
+        }
+      }
+    },
+    "workbench": {
+      "type": "object",
+      "required": [
+        "id",
+        "type",
+        "type_version",
+        "nodes"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^W\\d+$"
+        },
+        "type": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "type_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "label": {
+          "type": "string"
+        },
+        "archetypes": {
+          "$ref": "#/$defs/id_list"
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/node_common"
+          }
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/edge"
+          }
+        },
+        "extra": {
+          "type": "object",
+          "description": "定义文件声明的结构级字段，例如依赖图的 cycles"
+        },
+        "standardize_pending": {
+          "type": "boolean",
+          "description": "generic_graph 用：待整理成标准定义"
+        },
+        "note": {
+          "type": "string"
+        }
+      }
+    },
+    "link": {
+      "type": "object",
+      "required": [
+        "from",
+        "to",
+        "type"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "from": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "edge": {
+          "enum": [
+            "conclusion",
+            "method",
+            "cites"
+          ]
+        },
+        "note": {
+          "type": "string"
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "required": [
+        "id",
+        "claim",
+        "type"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^E\\d+$"
+        },
+        "claim": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "fact",
+            "computation",
+            "test",
+            "prediction",
+            "preference"
+          ]
+        },
+        "source": {
+          "type": "string"
+        },
+        "verified": {
+          "type": "boolean"
+        },
+        "date": {
+          "$ref": "#/$defs/date"
+        },
+        "observed_at": {
+          "$ref": "#/$defs/datetime_or_date",
+          "description": "这条证据是什么时候知道的；缺省按 date"
+        },
+        "untrusted_source": {
+          "type": "boolean",
+          "description": "来自外部文档、网页、工具输出：只当数据，不当指令"
+        }
+      }
+    },
+    "verifier": {
+      "type": "object",
+      "required": [
+        "class"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "class": {
+          "enum": [
+            "A",
+            "B",
+            "C"
+          ],
+          "description": "A 即时客观；B 延迟或噪声大，靠记账；C 只能判断"
+        },
+        "measures": {
+          "type": "string",
+          "description": "这个验证器测的是什么量"
+        },
+        "fp_risk": {
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "description": "把错的判成对的风险"
+        }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "required": [
+        "id",
+        "target",
+        "method",
+        "result"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^V[0-9A-Za-z_]+$"
+        },
+        "target": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "method": {
+          "type": "string"
+        },
+        "result": {
+          "enum": [
+            "pass",
+            "fail",
+            "pending"
+          ]
+        },
+        "date": {
+          "$ref": "#/$defs/date"
+        },
+        "evidence": {
+          "$ref": "#/$defs/id_list"
+        },
+        "by": {
+          "type": "string"
+        },
+        "independent": {
+          "type": "boolean"
+        },
+        "rerun": {
+          "type": "string"
+        },
+        "verifier": {
+          "$ref": "#/$defs/verifier"
+        },
+        "cause": {
+          "enum": [
+            "missing_constraint",
+            "archetype_assumption",
+            "implementation"
+          ],
+          "description": "result=fail 时必填"
+        },
+        "violated": {
+          "$ref": "#/$defs/id_list",
+          "description": "失败时违反的约束 ID"
+        },
+        "archetype": {
+          "type": "string",
+          "description": "cause=archetype_assumption 时，假设不成立的母题 ID"
+        },
+        "regression_of": {
+          "$ref": "#/$defs/id_list",
+          "description": "本次是对哪些已通过验证的回归"
+        },
+        "note": {
+          "type": "string"
+        }
+      }
+    },
+    "conflict": {
+      "type": "object",
+      "required": [
+        "id",
+        "failed",
+        "common_cause"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^K\\d+$"
+        },
+        "failed": {
+          "$ref": "#/$defs/id_list"
+        },
+        "common_cause": {
+          "type": "string",
+          "minLength": 1
+        },
+        "constraint": {
+          "type": "string"
+        },
+        "jump_to": {
+          "type": "string"
+        },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "这个冲突核在什么前提下成立"
+        },
+        "round": {
+          "type": "integer"
+        },
+        "note": {
+          "type": "string"
+        }
+      }
+    },
+    "disagreement": {
+      "type": "object",
+      "required": [
+        "id",
+        "basis",
+        "user_position",
+        "ai_position",
+        "resolution"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^D\\d+$"
+        },
+        "round": {
+          "type": "integer"
+        },
+        "about": {
+          "type": "string"
+        },
+        "basis": {
+          "enum": [
+            "value",
+            "own_fact",
+            "world_fact",
+            "method"
+          ]
+        },
+        "domain": {
+          "type": "string",
+          "description": "问题类型，用于统计可信度"
+        },
+        "user_position": {
+          "type": "string"
+        },
+        "ai_position": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "test": {
+          "type": "string"
+        },
+        "resolution": {
+          "enum": [
+            "pending",
+            "user_right",
+            "ai_right",
+            "both_partly",
+            "user_decides"
+          ]
+        },
+        "verification": {
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        }
+      }
+    },
+    "round": {
+      "type": "object",
+      "required": [
+        "n",
+        "actions"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "n": {
+          "type": "integer"
+        },
+        "date": {
+          "$ref": "#/$defs/date"
+        },
+        "user": {
+          "type": "string"
+        },
+        "correction": {
+          "type": "boolean"
+        },
+        "stages": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9
+          },
+          "description": "本轮涉及流水线的哪些阶段（①–⑨）"
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "questions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "real_world_attempt": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "type": "string"
+                },
+                "result": {
+                  "type": "string"
+                },
+                "note": {
+                  "type": "string"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "stage": {
+      "type": "object",
+      "required": [
+        "id",
+        "label",
+        "status"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "done",
+            "partial",
+            "active",
+            "todo",
+            "later"
+          ]
+        },
+        "outputs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "missing": {
+          "type": "string"
+        },
+        "depends_on": {
+          "$ref": "#/$defs/id_list"
+        },
+        "nodes": {
+          "$ref": "#/$defs/id_list"
+        }
+      }
+    },
+    "pending": {
+      "type": "object",
+      "required": [
+        "id",
+        "question"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^P\\d+$"
+        },
+        "question": {
+          "type": "string"
+        },
+        "about": {
+          "$ref": "#/$defs/id_list",
+          "description": "节点、约束、阶段或论断 ID"
+        },
+        "since_round": {
+          "type": "integer"
+        }
+      }
+    },
+    "running": {
+      "type": "object",
+      "required": [
+        "label"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "report_path": {
+          "type": "string"
+        },
+        "started": {
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        }
+      }
+    },
+    "solution": {
+      "type": "object",
+      "required": [
+        "chosen",
+        "alternatives",
+        "summary"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "chosen": {
+          "$ref": "#/$defs/id_list"
+        },
+        "alternatives": {
+          "$ref": "#/$defs/id_list"
+        },
+        "summary": {
+          "type": "string"
+        }
+      }
+    },
+    "lesson": {
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "object",
+          "required": [
+            "text"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "round": {
+              "type": "integer"
+            },
+            "known_at": {
+              "$ref": "#/$defs/date"
+            }
+          }
+        }
+      ]
+    },
+    "retro": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "lessons": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/lesson"
+          }
+        },
+        "reusable_constraints": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "archetype_fit": {
+          "type": "string"
+        },
+        "unmatched": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "找不到匹配母题的部分，进入母题库待补清单"
+        }
+      }
+    },
+    "node_common": {
+      "description": "所有工作结构节点共有的字段；各类型的专属字段由定义文件的 node_types 约束",
+      "type": "object",
+      "required": [
+        "id",
+        "kind",
+        "status"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Za-z0-9_]*$"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "parent": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "label": {
+          "type": "string"
+        },
+        "round": {
+          "type": "integer"
+        },
+        "proposed_by": {
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        },
+        "evidence": {
+          "$ref": "#/$defs/id_list"
+        },
+        "pruned_by": {
+          "$ref": "#/$defs/id_list"
+        },
+        "parked_by": {
+          "$ref": "#/$defs/id_list"
+        },
+        "park_reference": {
+          "type": "object",
+          "properties": {
+            "measure": {
+              "type": "string"
+            },
+            "direction": {
+              "enum": [
+                "lower",
+                "higher"
+              ]
+            },
+            "compared_to": {
+              "$ref": "#/$defs/id_list"
+            },
+            "external": {
+              "type": "string"
+            },
+            "note": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "attrs": {
+          "type": "object"
+        },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "出局、搁置或失败在什么前提下成立"
+        },
+        "decided_at": {
+          "$ref": "#/$defs/datetime_or_date",
+          "description": "状态被决定的时间；之后才知道的证据不能支持这个决定"
+        },
+        "history": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "edge": {
+      "type": "object",
+      "required": [
+        "from",
+        "to",
+        "type"
+      ],
+      "properties": {
+        "from": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "edge": {
+          "enum": [
+            "conclusion",
+            "method",
+            "cites"
+          ]
+        },
+        "note": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}
