@@ -1055,6 +1055,32 @@
           "$ref": "#/$defs/datetime_or_date",
           "description": "状态被决定的时间；之后才知道的证据不能支持这个决定"
         },
+        "final_judge": {
+          "type": "string",
+          "minLength": 1,
+          "description": "这一块最后由谁裁决对错：现实、用户、代码、求解器、原文、读者、审稿人与实验等"
+        },
+        "rho_T": {
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ],
+          "description": "模型直接回答在这一块上与最终裁决的一致程度（粗估）。high 的节点是叶子，直接生成"
+        },
+        "judge": {
+          "type": "string",
+          "minLength": 1,
+          "description": "实际派给的信号：模型直接生成、检索、问用户、代码、求解器、现实试探等"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "与这个节点相关的文件路径（相对案例库或项目根）"
+        },
         "history": {
           "type": "array",
           "items": {

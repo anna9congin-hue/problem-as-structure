@@ -38,6 +38,9 @@
     {"id": "P-AG-05", "about": "自评独立（检验者就是提出者）", "ops": [{"op": "replace", "path": "/verifications/3/result", "value": "pass"}, {"op": "add", "path": "/verifications/3/independent", "value": true}, {"op": "add", "path": "/verifications/3/by", "value": "ai"}], "expect": ["AG-05"]},
     {"id": "P-AG-06", "about": "上游撤回后下游未处理（只检查规则提醒）", "ops": [{"op": "add", "path": "/workbenches/2/nodes/-", "value": {"id": "CL2", "kind": "claim", "status": "current", "statement": "因此不需要备选方案"}}, {"op": "add", "path": "/workbenches/2/edges/-", "value": {"from": "CL2", "to": "CL1", "type": "depends_on", "edge": "conclusion"}}, {"op": "replace", "path": "/workbenches/2/nodes/0/status", "value": "withdrawn"}, {"op": "add", "path": "/workbenches/2/nodes/0/withdrawal", "value": {"date": "2026-10-20", "root_cause": "测试", "scope": "statement"}}], "expect": ["AG-06"]},
     {"id": "P-AG-08", "about": "预测过了结算日没结算（只检查规则提醒）", "ops": [{"op": "replace", "path": "/workbenches/2/nodes/0/prediction/settle_by", "value": "2026-10-15"}], "expect": ["AG-08"]},
-    {"id": "P-FP-01", "about": "快速通道没写理由", "ops": [{"op": "add", "path": "/problem/fast_path", "value": {"reason": ""}}], "expect": ["SCHEMA"]}
+    {"id": "P-FP-01", "about": "快速通道没写理由", "ops": [{"op": "add", "path": "/problem/fast_path", "value": {"reason": ""}}], "expect": ["SCHEMA"]},
+    {"id": "P-DP-01", "about": "rho_T=high 的节点展开了子节点", "ops": [{"op": "add", "path": "/workbenches/0/nodes/1/rho_T", "value": "high"}], "expect": ["DP-01"]},
+    {"id": "P-DP-02", "about": "子节点与父节点最终验证者相同", "ops": [{"op": "add", "path": "/workbenches/0/nodes/0/final_judge", "value": "现实"}, {"op": "add", "path": "/workbenches/0/nodes/4/final_judge", "value": "现实"}], "expect": ["DP-02"]},
+    {"id": "P-DP-03", "about": "rho_T 取值不在 high/medium/low", "ops": [{"op": "add", "path": "/workbenches/0/nodes/1/rho_T", "value": "高"}], "expect": ["SCHEMA"]}
   ]
 }

@@ -18,6 +18,8 @@
 
 `id`、`kind`、`status`、`label`（论证图用 `statement`）、`parent`（树形结构）、`round`、`proposed_by`、`note`、`evidence`、`pruned_by`、`parked_by`、`park_reference`、`attrs`、`conditions`（出局或搁置在什么前提下成立）、`decided_at`（之后才知道的证据不能支持这个决定）、`history`。
 
+派工字段（v2.1）：`final_judge`（这一块最后由谁裁决）、`rho_T`（high / medium / low，模型直接回答与最终裁决的一致程度）、`judge`（实际派给的信号）、`files`（相关文件路径）。规则：子节点与父节点的 `final_judge` 相同时提醒 DP-02；`rho_T=high` 的节点有子节点时提醒 DP-01。做法见 SKILL.md"派工：每一块交给谁判"。
+
 ## 扩展：增加一种新结构
 
 1. 同一种临时结构（`generic_graph` 加同样的用法）在 2 个以上案例出现，就值得标准化。

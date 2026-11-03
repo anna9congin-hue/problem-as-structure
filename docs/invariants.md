@@ -48,6 +48,12 @@
 | VF-04 | regression_of 只能指向已存在、result=pass、日期不晚于本次的验证 | error | v2 R3 | P-VF-03 |
 | VF-05 | 独立检验：independent=true 必须写 by，且 by 不是被验证论断的提出者 | remind（提醒·独立） | v1 | P-AG-05 |
 
+## 5a. 派工（v2.1）
+| ID | 规则 | 级别 | 来源 | 坏数据 |
+|---|---|---|---|---|
+| DP-01 | rho_T=high 的节点有子节点：应为叶子直接生成 | remind | 论文案例 R85，draft/02 §2.8 | P-DP-01 |
+| DP-02 | 未出局的子节点与父节点 final_judge 相同：拆分只造出替身 | remind | 论文案例 R85，draft/02 §2.8 | P-DP-02 |
+
 ## 5. 时点（横切 X2）
 
 | ID | 规则 | 级别 | 来源 | 坏数据测试 |

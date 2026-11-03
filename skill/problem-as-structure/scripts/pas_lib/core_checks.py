@@ -235,6 +235,20 @@ def _core_v2(case, r):
             d = _date_of(EV.get(e, {}))
             if d and d > dt[:10]:
                 r.add("error", "TM-01", f"节点 {n['id']} 在 {dt[:10]} 做出决定，却用了 {d} 才知道的证据 {e}")
+    # DP：派工（按最终验证者展开与停止）
+    for wb in case.get("workbenches", []):
+        W = {n["id"]: n for n in wb.get("nodes", [])}
+        for n in W.values():
+            p = W.get(n.get("parent"))
+            if not p:
+                continue
+            if p.get("rho_T") == "high":
+                r.add("remind", "DP-01", f"节点 {p['id']} 的 rho_T 是 high，却展开了子节点 {n['id']}",
+                      "模型直接回答在这一块上已经和最终裁决一致：作为叶子直接生成，拆开只会用替身代替最终验证者")
+            fj, pj = n.get("final_judge"), p.get("final_judge")
+            if fj and pj and fj.strip() == pj.strip() and n.get("status") not in ("pruned", "failed"):
+                r.add("remind", "DP-02", f"子节点 {n['id']} 与父节点 {p['id']} 的最终验证者相同（{fj}）",
+                      "只有子块的最终验证者不同、且有比模型更准的信号时才展开；否则并回父节点")
     # 快速通道
     fp = case["problem"].get("fast_path") if isinstance(case.get("problem"), dict) else None
     if fp and not fp.get("reason"):
