@@ -246,7 +246,8 @@ def _core_v2(case, r):
                 r.add("remind", "DP-01", f"节点 {p['id']} 的 rho_T 是 high，却展开了子节点 {n['id']}",
                       "模型直接回答在这一块上已经和最终裁决一致：作为叶子直接生成，拆开只会用替身代替最终验证者")
             fj, pj = n.get("final_judge"), p.get("final_judge")
-            if fj and pj and fj.strip() == pj.strip() and n.get("status") not in ("pruned", "failed"):
+            # 只查"拆成部分"的子目标；同一目标下互为替代的候选本来就由同一个验证者比较
+            if n.get("kind") == "subgoal" and fj and pj and fj.strip() == pj.strip() and n.get("status") not in ("pruned", "failed"):
                 r.add("remind", "DP-02", f"子节点 {n['id']} 与父节点 {p['id']} 的最终验证者相同（{fj}）",
                       "只有子块的最终验证者不同、且有比模型更准的信号时才展开；否则并回父节点")
     # 快速通道

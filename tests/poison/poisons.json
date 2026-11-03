@@ -40,7 +40,7 @@
     {"id": "P-AG-08", "about": "预测过了结算日没结算（只检查规则提醒）", "ops": [{"op": "replace", "path": "/workbenches/2/nodes/0/prediction/settle_by", "value": "2026-10-15"}], "expect": ["AG-08"]},
     {"id": "P-FP-01", "about": "快速通道没写理由", "ops": [{"op": "add", "path": "/problem/fast_path", "value": {"reason": ""}}], "expect": ["SCHEMA"]},
     {"id": "P-DP-01", "about": "rho_T=high 的节点展开了子节点", "ops": [{"op": "add", "path": "/workbenches/0/nodes/1/rho_T", "value": "high"}], "expect": ["DP-01"]},
-    {"id": "P-DP-02", "about": "子节点与父节点最终验证者相同", "ops": [{"op": "add", "path": "/workbenches/0/nodes/0/final_judge", "value": "现实"}, {"op": "add", "path": "/workbenches/0/nodes/4/final_judge", "value": "现实"}], "expect": ["DP-02"]},
+    {"id": "P-DP-02", "about": "拆出的子目标与父节点最终验证者相同", "ops": [{"op": "add", "path": "/workbenches/0/nodes/0/final_judge", "value": "现实"}, {"op": "add", "path": "/workbenches/0/nodes/4/final_judge", "value": "现实"}, {"op": "replace", "path": "/workbenches/0/nodes/4/kind", "value": "subgoal"}], "expect": ["DP-02"]},
     {"id": "P-DP-03", "about": "rho_T 取值不在 high/medium/low", "ops": [{"op": "add", "path": "/workbenches/0/nodes/1/rho_T", "value": "高"}], "expect": ["SCHEMA"]}
   ]
 }
